@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -188,11 +189,43 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  static const bool _useSyntheticRecording = true;
+  static const int _recordingSampleRate = 44100;
 
   final AudioRecorder audioRecorder = AudioRecorder();
   final AudioPlayer audioPlayer = AudioPlayer();
+  StreamSubscription<void>? _playerCompleteSubscription;
+  StreamSubscription<PlayerState>? _playerStateSubscription;
+  Timer? _playbackResetTimer;
+  int? _playingSketchId;
   bool isRecording = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(audioPlayer.setReleaseMode(ReleaseMode.stop));
+    _playerCompleteSubscription = audioPlayer.onPlayerComplete.listen((_) {
+      _clearPlayingSketch();
+    });
+    _playerStateSubscription = audioPlayer.onPlayerStateChanged.listen((state) {
+      if (state == PlayerState.completed || state == PlayerState.stopped) {
+        _clearPlayingSketch();
+      }
+    });
+  }
+
+  void _clearPlayingSketch() {
+    _playbackResetTimer?.cancel();
+    _playbackResetTimer = null;
+
+    if (!mounted) {
+      _playingSketchId = null;
+      return;
+    }
+
+    if (_playingSketchId != null) {
+      setState(() => _playingSketchId = null);
+    }
+  }
 
   Future<List<Map<String, dynamic>>> getSketches() async {
     final data = await Supabase.instance.client
@@ -204,9 +237,9 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> startRecording() async {
     try {
-      if (_useSyntheticRecording) {
-        await _createSyntheticScaleSketch();
-        return;
+      if (_playingSketchId != null) {
+        await audioPlayer.stop();
+        _clearPlayingSketch();
       }
 
       if (await audioRecorder.hasPermission()) {
@@ -216,7 +249,7 @@ class _MyHomePageState extends State<MyHomePage> {
         await audioRecorder.start(
           const RecordConfig(
             encoder: AudioEncoder.wav,
-            sampleRate: 16000,
+            sampleRate: _recordingSampleRate,
             numChannels: 1,
           ),
           path: path,
@@ -225,42 +258,6 @@ class _MyHomePageState extends State<MyHomePage> {
       }
     } catch (e) {
       debugPrint("Błąd nagrywania: $e");
-    }
-  }
-
-  Future<void> _createSyntheticScaleSketch() async {
-    final wavBytes = MidiEngine.generateSineSequenceWav();
-    final fileName =
-        "synthetic_scale_${DateTime.now().millisecondsSinceEpoch}.wav";
-    final userId = Supabase.instance.client.auth.currentUser!.id;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("Tworzę testowy WAV: C5-D5-E5-F5-G5-A5-B5-C6"),
-        duration: Duration(seconds: 1),
-      ),
-    );
-
-    await Supabase.instance.client.storage
-        .from('audio-samples')
-        .uploadBinary(
-          fileName,
-          wavBytes,
-          fileOptions: const FileOptions(contentType: 'audio/wav'),
-        );
-
-    final String publicUrl = Supabase.instance.client.storage
-        .from('audio-samples')
-        .getPublicUrl(fileName);
-
-    await Supabase.instance.client.from('sketches').insert({
-      'user_id': userId,
-      'title': 'Test sine C5-D5-E5-F5-G5-A5-B5-C6',
-      'audio_path': publicUrl,
-    });
-
-    if (mounted) {
-      setState(() {});
     }
   }
 
@@ -277,7 +274,11 @@ class _MyHomePageState extends State<MyHomePage> {
         // 1. Upload do Storage
         await Supabase.instance.client.storage
             .from('audio-samples')
-            .upload(fileName, file);
+            .upload(
+              fileName,
+              file,
+              fileOptions: const FileOptions(contentType: 'audio/wav'),
+            );
 
         // 2. Pobranie Linku
         final String publicUrl = Supabase.instance.client.storage
@@ -299,12 +300,55 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> deleteSketch(int id, String filePath) async {
+    if (_playingSketchId == id) {
+      await audioPlayer.stop();
+      _clearPlayingSketch();
+    }
+
     final fileName = filePath.split('/').last;
     await Supabase.instance.client.from('sketches').delete().match({'id': id});
     await Supabase.instance.client.storage.from('audio-samples').remove([
       fileName,
     ]);
     setState(() {});
+  }
+
+  Future<void> playOrStopSketch(int sketchId, String audioUrl) async {
+    try {
+      if (_playingSketchId == sketchId) {
+        await audioPlayer.stop();
+        _clearPlayingSketch();
+        return;
+      }
+
+      _playbackResetTimer?.cancel();
+      await audioPlayer.stop();
+      await audioPlayer.play(UrlSource(audioUrl));
+
+      if (mounted) {
+        setState(() => _playingSketchId = sketchId);
+      }
+
+      final duration = await audioPlayer.getDuration();
+      if (duration != null) {
+        _playbackResetTimer = Timer(duration + const Duration(seconds: 1), () {
+          if (_playingSketchId == sketchId) {
+            _clearPlayingSketch();
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint("Błąd odtwarzania: $e");
+      if (mounted) {
+        _clearPlayingSketch();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Nie udało się odtworzyć klipu: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   void _showSuccessDialog() {
@@ -393,6 +437,9 @@ class _MyHomePageState extends State<MyHomePage> {
 
   @override
   void dispose() {
+    _playbackResetTimer?.cancel();
+    _playerCompleteSubscription?.cancel();
+    _playerStateSubscription?.cancel();
     audioRecorder.dispose();
     audioPlayer.dispose();
     super.dispose();
@@ -472,11 +519,14 @@ class _MyHomePageState extends State<MyHomePage> {
                   itemCount: sketches.length,
                   itemBuilder: (context, index) {
                     final item = sketches[index];
+                    final itemId = item['id'] as int;
+                    final audioPath = item['audio_path'] as String;
+                    final isPlaying = _playingSketchId == itemId;
+
                     return Dismissible(
-                      key: Key(item['id'].toString()),
+                      key: Key(itemId.toString()),
                       direction: DismissDirection.endToStart,
-                      onDismissed: (_) =>
-                          deleteSketch(item['id'], item['audio_path']),
+                      onDismissed: (_) => deleteSketch(itemId, audioPath),
                       background: Container(
                         color: Colors.red,
                         alignment: Alignment.centerRight,
@@ -501,20 +551,22 @@ class _MyHomePageState extends State<MyHomePage> {
                                   Icons.auto_awesome,
                                   color: Colors.purple,
                                 ), // Ikona magii
-                                onPressed: () => convertAudioToMidi(
-                                  item['audio_path'],
-                                  item['id'],
-                                ),
+                                onPressed: () =>
+                                    convertAudioToMidi(audioPath, itemId),
                                 tooltip: "Konwertuj na MIDI",
                               ),
                               IconButton(
-                                icon: const Icon(
-                                  Icons.play_arrow,
-                                  color: Colors.amber,
+                                icon: Icon(
+                                  isPlaying
+                                      ? Icons.stop_circle
+                                      : Icons.play_arrow,
+                                  color: isPlaying ? Colors.red : Colors.amber,
                                 ),
-                                onPressed: () => audioPlayer.play(
-                                  UrlSource(item['audio_path']),
-                                ),
+                                onPressed: () =>
+                                    playOrStopSketch(itemId, audioPath),
+                                tooltip: isPlaying
+                                    ? "Zatrzymaj odtwarzanie"
+                                    : "Odtwórz klip",
                               ),
                             ],
                           ),

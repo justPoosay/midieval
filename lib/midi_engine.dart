@@ -6,12 +6,18 @@ import 'package:wav/wav.dart';
 class MidiEngine {
   static const int _ticksPerQuarter = 480;
   static const int _defaultTempoBpm = 120;
-  static const double _minPitchHz = 60;
-  static const double _maxPitchHz = 2000;
-  static const double _yinThreshold = 0.16;
-  static const double _minNoteSeconds = 0.10;
+  static const double _minPitchHz = 75;
+  static const double _maxPitchHz = 1100;
+  static const double _yinThreshold = 0.12;
+  static const double _minNoteSeconds = 0.20;
+  static const double _minNoteSwitchSeconds = 0.18;
   static const double _maxGapSeconds = 0.14;
+  static const int _smoothingRadius = 5;
+  static const double _minSmoothingVoteRatio = 0.56;
+  static const double _maxFragmentSeconds = 0.30;
+  static const double _fragmentMedianRatio = 0.58;
   static const int _beatsPerMeasure = 4;
+  static const int _ticksPerBar = _ticksPerQuarter * _beatsPerMeasure;
   static const int _quantizeTicks = _ticksPerQuarter ~/ 4;
   static const List<double> _musicalBeatIntervals = [
     0.25,
@@ -48,7 +54,7 @@ class MidiEngine {
 
   static Uint8List generateSineSequenceWav({
     List<int> midiNotes = const [72, 74, 76, 77, 79, 81, 83, 84],
-    int sampleRate = 16000,
+    int sampleRate = 44100,
     double noteSeconds = 0.52,
     double gapSeconds = 0,
   }) {
@@ -153,7 +159,7 @@ class MidiEngine {
     }
 
     final strongestRms = _percentile(rmsValues, 0.90);
-    final silenceGate = math.max(0.015, strongestRms * 0.18);
+    final silenceGate = math.max(0.020, strongestRms * 0.25);
     final rawFrames = List<_PitchFrame?>.filled(frameCount, null);
 
     for (var frame = 0; frame < frameCount; frame++) {
@@ -162,7 +168,7 @@ class MidiEngine {
 
       final start = frame * hopSize;
       final pitch = _estimatePitchYin(samples, start, frameSize, sampleRate);
-      if (pitch == null || pitch.confidence < 0.70) continue;
+      if (pitch == null || pitch.confidence < 0.78) continue;
 
       final note = _frequencyToMidi(pitch.frequency);
       if (note < 24 || note > 108) continue;
@@ -193,8 +199,8 @@ class MidiEngine {
       var seen = 0;
 
       for (
-        var j = math.max(0, i - 2);
-        j <= math.min(frames.length - 1, i + 2);
+        var j = math.max(0, i - _smoothingRadius);
+        j <= math.min(frames.length - 1, i + _smoothingRadius);
         j++
       ) {
         final neighbor = frames[j];
@@ -205,10 +211,16 @@ class MidiEngine {
         seen++;
       }
 
-      final note = counts.entries
-          .reduce((a, b) => a.value >= b.value ? a : b)
-          .key;
-      smoothed[i] = _PitchFrame(note, confidence / seen, rms / seen);
+      if (seen == 0) continue;
+
+      final noteEntry = counts.entries.reduce(
+        (a, b) => a.value >= b.value ? a : b,
+      );
+      if (noteEntry.value / seen < _minSmoothingVoteRatio && seen >= 5) {
+        continue;
+      }
+
+      smoothed[i] = _PitchFrame(noteEntry.key, confidence / seen, rms / seen);
     }
 
     return smoothed;
@@ -226,7 +238,9 @@ class MidiEngine {
     final frameSeconds = frameSize / sampleRate;
 
     int? currentNote;
+    int? pendingNote;
     var startSeconds = 0.0;
+    var pendingStartSeconds = 0.0;
     var lastPitchedSeconds = 0.0;
     var rmsSum = 0.0;
     var frameSum = 0;
@@ -250,6 +264,7 @@ class MidiEngine {
       }
 
       currentNote = null;
+      pendingNote = null;
       rmsSum = 0;
       frameSum = 0;
     }
@@ -263,16 +278,35 @@ class MidiEngine {
             timeSeconds - lastPitchedSeconds > _maxGapSeconds) {
           closeNote(lastPitchedSeconds + frameSeconds);
         }
+        pendingNote = null;
         continue;
       }
 
       if (currentNote == null) {
         currentNote = frame.note;
         startSeconds = timeSeconds;
+        pendingNote = null;
       } else if (frame.note != currentNote) {
-        closeNote(timeSeconds);
-        currentNote = frame.note;
-        startSeconds = timeSeconds;
+        if (frame.note != pendingNote) {
+          pendingNote = frame.note;
+          pendingStartSeconds = timeSeconds;
+        }
+
+        if (timeSeconds - pendingStartSeconds >= _minNoteSwitchSeconds) {
+          closeNote(pendingStartSeconds);
+          currentNote = frame.note;
+          startSeconds = pendingStartSeconds;
+          pendingNote = null;
+          rmsSum = 0;
+          frameSum = 0;
+        } else {
+          lastPitchedSeconds = timeSeconds;
+          rmsSum += frame.rms;
+          frameSum++;
+          continue;
+        }
+      } else {
+        pendingNote = null;
       }
 
       lastPitchedSeconds = timeSeconds;
@@ -284,7 +318,7 @@ class MidiEngine {
       closeNote(lastPitchedSeconds + frameSeconds);
     }
 
-    return _mergeCloseNotes(notes);
+    return _cleanupUnstableNotes(_mergeCloseNotes(notes));
   }
 
   static List<_DetectedNote> _mergeCloseNotes(List<_DetectedNote> notes) {
@@ -313,6 +347,96 @@ class MidiEngine {
     }
 
     return merged;
+  }
+
+  static List<_DetectedNote> _cleanupUnstableNotes(List<_DetectedNote> notes) {
+    if (notes.length < 2) return notes;
+
+    var cleaned = notes;
+    for (var pass = 0; pass < 3; pass++) {
+      final nextPass = _absorbShortFragments(cleaned);
+      if (nextPass.length == cleaned.length) return nextPass;
+      cleaned = _mergeCloseNotes(nextPass);
+    }
+
+    return cleaned;
+  }
+
+  static List<_DetectedNote> _absorbShortFragments(List<_DetectedNote> notes) {
+    if (notes.length < 2) return notes;
+
+    final medianDuration = _medianDurationSeconds(notes);
+    final fragmentLimit = math
+        .min(_maxFragmentSeconds, medianDuration * _fragmentMedianRatio)
+        .clamp(_minNoteSeconds, _maxFragmentSeconds);
+    final cleaned = <_DetectedNote>[];
+
+    for (var i = 0; i < notes.length; i++) {
+      final note = notes[i];
+      final previous = cleaned.isEmpty ? null : cleaned.last;
+      final next = i < notes.length - 1 ? notes[i + 1] : null;
+
+      if (!_isUnstableFragment(note, previous, next, fragmentLimit)) {
+        cleaned.add(note);
+        continue;
+      }
+
+      if (previous != null &&
+          (next == null || previous.durationSeconds >= next.durationSeconds)) {
+        cleaned[cleaned.length - 1] = previous.copyWith(
+          durationSeconds: _noteEndSeconds(note) - previous.startSeconds,
+          velocity: math.max(previous.velocity, note.velocity),
+        );
+      } else if (next != null) {
+        notes[i + 1] = next.copyWith(
+          startSeconds: note.startSeconds,
+          durationSeconds: _noteEndSeconds(next) - note.startSeconds,
+          velocity: math.max(next.velocity, note.velocity),
+        );
+      }
+    }
+
+    return cleaned;
+  }
+
+  static bool _isUnstableFragment(
+    _DetectedNote note,
+    _DetectedNote? previous,
+    _DetectedNote? next,
+    double fragmentLimit,
+  ) {
+    if (note.durationSeconds > fragmentLimit) return false;
+    if (previous == null && next == null) return false;
+
+    final previousIsStable =
+        previous != null &&
+        previous.durationSeconds >= note.durationSeconds * 1.35;
+    final nextIsStable =
+        next != null && next.durationSeconds >= note.durationSeconds * 1.35;
+    if (!previousIsStable && !nextIsStable) return false;
+
+    final betweenStableNotes =
+        previous != null &&
+        next != null &&
+        previous.durationSeconds > note.durationSeconds &&
+        next.durationSeconds > note.durationSeconds;
+    if (betweenStableNotes) return true;
+
+    final previousSemitoneWobble =
+        previous != null && (previous.note - note.note).abs() == 1;
+    final nextSemitoneWobble =
+        next != null && (next.note - note.note).abs() == 1;
+    return previousSemitoneWobble || nextSemitoneWobble;
+  }
+
+  static double _medianDurationSeconds(List<_DetectedNote> notes) {
+    final durations = notes.map((note) => note.durationSeconds).toList()
+      ..sort();
+    return durations[durations.length ~/ 2];
+  }
+
+  static double _noteEndSeconds(_DetectedNote note) {
+    return note.startSeconds + note.durationSeconds;
   }
 
   static _PitchEstimate? _estimatePitchYin(
@@ -521,6 +645,9 @@ class MidiEngine {
     List<_DetectedNote> notes, {
     required int tempoBpm,
   }) {
+    final barAlignedPhrase = _quantizeBarAlignedPhrase(notes);
+    if (barAlignedPhrase != null) return barAlignedPhrase;
+
     final beatSeconds = 60 / tempoBpm;
     final quantized = <_QuantizedNote>[];
     var currentStartTick = 0;
@@ -567,6 +694,70 @@ class MidiEngine {
     }
 
     return quantized;
+  }
+
+  static List<_QuantizedNote>? _quantizeBarAlignedPhrase(
+    List<_DetectedNote> notes,
+  ) {
+    if (!_shouldUseBarAlignedPhrase(notes)) return null;
+
+    final barCount = notes.length ~/ _beatsPerMeasure;
+    final phraseTicks = barCount * _ticksPerBar;
+    final noteTicks = phraseTicks ~/ notes.length;
+    if (noteTicks < _quantizeTicks || noteTicks % _quantizeTicks != 0) {
+      return null;
+    }
+
+    return [
+      for (var i = 0; i < notes.length; i++)
+        _QuantizedNote(
+          note: notes[i].note,
+          startTick: i * noteTicks,
+          durationTicks: noteTicks,
+          velocity: notes[i].velocity,
+        ),
+    ];
+  }
+
+  static bool _shouldUseBarAlignedPhrase(List<_DetectedNote> notes) {
+    if (notes.length < _beatsPerMeasure || notes.length > 16) return false;
+    if (notes.length % _beatsPerMeasure != 0) return false;
+
+    final intervals = <double>[];
+    for (var i = 1; i < notes.length; i++) {
+      final interval = notes[i].startSeconds - notes[i - 1].startSeconds;
+      if (interval <= 0) return false;
+      intervals.add(interval);
+    }
+
+    if (intervals.isEmpty) return false;
+
+    final intervalMedian = _medianDouble(intervals);
+    if (intervalMedian <= 0) return false;
+
+    var relativeDeviationSum = 0.0;
+    for (final interval in intervals) {
+      relativeDeviationSum +=
+          (interval - intervalMedian).abs() / intervalMedian;
+    }
+    final averageRelativeDeviation = relativeDeviationSum / intervals.length;
+    if (averageRelativeDeviation > 0.45) return false;
+
+    var stepwiseMoves = 0;
+    for (var i = 1; i < notes.length; i++) {
+      if ((notes[i].note - notes[i - 1].note).abs() <= 2) {
+        stepwiseMoves++;
+      }
+    }
+    return stepwiseMoves / (notes.length - 1) >= 0.70;
+  }
+
+  static double _medianDouble(List<double> values) {
+    final sorted = values.toList()..sort();
+    final middle = sorted.length ~/ 2;
+    if (sorted.length.isOdd) return sorted[middle];
+
+    return (sorted[middle - 1] + sorted[middle]) / 2;
   }
 
   static int _lastNoteAvailableTicks(List<_QuantizedNote> notes, int index) {
@@ -719,10 +910,14 @@ class _DetectedNote {
   final double durationSeconds;
   final int velocity;
 
-  _DetectedNote copyWith({double? durationSeconds, int? velocity}) {
+  _DetectedNote copyWith({
+    double? startSeconds,
+    double? durationSeconds,
+    int? velocity,
+  }) {
     return _DetectedNote(
       note: note,
-      startSeconds: startSeconds,
+      startSeconds: startSeconds ?? this.startSeconds,
       durationSeconds: durationSeconds ?? this.durationSeconds,
       velocity: velocity ?? this.velocity,
     );
