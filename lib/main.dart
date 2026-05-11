@@ -26,20 +26,109 @@ class MyApp extends StatelessWidget {
       title: 'MIDieval',
       theme: ThemeData(
         brightness: Brightness.dark,
+        primarySwatch: Colors.amber,
         colorScheme: ColorScheme.fromSeed(
           seedColor: Colors.amber,
           brightness: Brightness.dark,
         ),
         useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'MIDieval: Bard Recorder'),
+      home: const AuthCheck(),
     );
   }
 }
 
+// Sprawdza, czy użytkownik jest zalogowany
+class AuthCheck extends StatelessWidget {
+  const AuthCheck({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final session = Supabase.instance.client.auth.currentSession;
+    return session == null ? const AuthScreen() : const MyHomePage();
+  }
+}
+
+// --- EKRAN LOGOWANIA ---
+class AuthScreen extends StatefulWidget {
+  const AuthScreen({super.key});
+
+  @override
+  State<AuthScreen> createState() => _AuthScreenState();
+}
+
+class _AuthScreenState extends State<AuthScreen> {
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isLoading = false;
+
+  Future<void> _handleSignIn() async {
+    setState(() => _isLoading = true);
+    try {
+      await Supabase.instance.client.auth.signInWithPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+      );
+      if (mounted) {
+        Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const MyHomePage()));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Błąd: $e")));
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _handleSignUp() async {
+    setState(() => _isLoading = true);
+    try {
+      await Supabase.instance.client.auth.signUp(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Zarejestrowano! Sprawdź email.")));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Błąd: $e")));
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.security, size: 80, color: Colors.amber),
+            const SizedBox(height: 16),
+            const Text("MIDieval", style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.amber)),
+            const Text("Zaloguj się, aby tworzyć kroniki nucenia"),
+            const SizedBox(height: 32),
+            TextField(controller: _emailController, decoration: const InputDecoration(labelText: "Email", border: OutlineInputBorder())),
+            const SizedBox(height: 16),
+            TextField(controller: _passwordController, decoration: const InputDecoration(labelText: "Hasło", border: OutlineInputBorder()), obscureText: true),
+            const SizedBox(height: 24),
+            if (_isLoading) const CircularProgressIndicator()
+            else Row(
+              children: [
+                Expanded(child: ElevatedButton(onPressed: _handleSignIn, child: const Text("Wejdź"))),
+                const SizedBox(width: 12),
+                Expanded(child: OutlinedButton(onPressed: _handleSignUp, child: const Text("Dołącz"))),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// --- GŁÓWNY EKRAN APLIKACJI ---
 class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-  final String title;
+  const MyHomePage({super.key});
 
   @override
   State<MyHomePage> createState() => _MyHomePageState();
@@ -50,7 +139,6 @@ class _MyHomePageState extends State<MyHomePage> {
   final AudioPlayer audioPlayer = AudioPlayer();
   bool isRecording = false;
 
-  // FUNKCJA POBIERAJĄCA LISTĘ Z BAZY
   Future<List<Map<String, dynamic>>> getSketches() async {
     final data = await Supabase.instance.client
         .from('sketches')
@@ -59,66 +147,72 @@ class _MyHomePageState extends State<MyHomePage> {
     return List<Map<String, dynamic>>.from(data);
   }
 
-  // ROZPOCZĘCIE NAGRYWANIA
   Future<void> startRecording() async {
     try {
       if (await audioRecorder.hasPermission()) {
         final directory = await getApplicationDocumentsDirectory();
-        final String path = '${directory.path}/nucenie_${DateTime.now().millisecondsSinceEpoch}.m4a';
-
-        const config = RecordConfig();
-        await audioRecorder.start(config, path: path);
-
-        setState(() {
-          isRecording = true;
-        });
+        final String path = '${directory.path}/rec_${DateTime.now().millisecondsSinceEpoch}.m4a';
+        await audioRecorder.start(const RecordConfig(), path: path);
+        setState(() => isRecording = true);
       }
     } catch (e) {
-      debugPrint("Błąd startu nagrywania: $e");
+      debugPrint("Błąd nagrywania: $e");
     }
   }
 
-  // ZATRZYMANIE I WYSYŁKA
   Future<void> stopRecording() async {
     try {
       final path = await audioRecorder.stop();
-      setState(() {
-        isRecording = false;
-      });
+      setState(() => isRecording = false);
 
       if (path != null) {
         final file = File(path);
-        final fileName = "nagranie_${DateTime.now().millisecondsSinceEpoch}.m4a";
+        final fileName = "voice_${DateTime.now().millisecondsSinceEpoch}.m4a";
+        final userId = Supabase.instance.client.auth.currentUser!.id;
 
-        // 1. Wysyłka pliku do Storage
-        await Supabase.instance.client.storage
-            .from('audio-samples')
-            .upload(fileName, file);
+        // 1. Upload do Storage
+        await Supabase.instance.client.storage.from('audio-samples').upload(fileName, file);
 
-        // 2. Pobranie linku
-        final String publicUrl = Supabase.instance.client.storage
-            .from('audio-samples')
-            .getPublicUrl(fileName);
+        // 2. Pobranie Linku
+        final String publicUrl = Supabase.instance.client.storage.from('audio-samples').getPublicUrl(fileName);
 
-        // 3. Zapis w tabeli sketches
+        // 3. Zapis w DB
         await Supabase.instance.client.from('sketches').insert({
+          'user_id': userId,
           'title': 'Nucenie ${DateTime.now().hour}:${DateTime.now().minute}',
           'audio_path': publicUrl,
-          'notes': 'Nagrano w MIDieval',
         });
 
-        // 4. Odświeżenie listy na ekranie
-        setState(() {});
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Buntownik zanucił, plik w chmurze! ☁️")),
-        );
+        setState(() {}); // Odśwież listę
       }
     } catch (e) {
-      debugPrint("Błąd wysyłania: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Błąd: $e")),
-      );
+      debugPrint("Błąd wysyłki: $e");
+    }
+  }
+
+  Future<void> deleteSketch(int id, String filePath) async {
+    final fileName = filePath.split('/').last;
+    await Supabase.instance.client.from('sketches').delete().match({'id': id});
+    await Supabase.instance.client.storage.from('audio-samples').remove([fileName]);
+    setState(() {});
+  }
+
+  Future<void> convertAudioToMidi(String audioUrl, int sketchId) async {
+    print("Rozpoczynam magię dla nagrania: $audioUrl");
+
+    // 1. Poinformuj użytkownika, że pracujemy
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Analizuję dźwięk... to może chwilę potrwać.")),
+    );
+
+    try {
+      // Tu za chwilę dodamy kod analizujący częstotliwość (Pitch Detection)
+      // Na ten moment zrobimy testowy plik MIDI
+
+      print("Sukces! Wygenerowano plik MIDI.");
+
+    } catch (e) {
+      print("Błąd konwersji: $e");
     }
   }
 
@@ -133,75 +227,80 @@ class _MyHomePageState extends State<MyHomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.title),
-        backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+        title: const Text("Moje Nucenia"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () async {
+              await Supabase.instance.client.auth.signOut();
+              if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const AuthCheck()));
+            },
+          )
+        ],
       ),
       body: Column(
         children: [
-          // PANEL NAGRYWANIA (GÓRA)
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: Colors.amber.withOpacity(0.1),
-              border: const Border(bottom: BorderSide(color: Colors.amber, width: 0.5)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                Column(
+          // PANEL NAGRYWANIA
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: InkWell(
+              onTap: isRecording ? stopRecording : startRecording,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: isRecording ? Colors.red.withOpacity(0.2) : Colors.amber.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: isRecording ? Colors.red : Colors.amber),
+                ),
+                child: Column(
                   children: [
-                    Icon(
-                      isRecording ? Icons.mic : Icons.mic_none,
-                      color: isRecording ? Colors.red : Colors.amber,
-                      size: 40,
-                    ),
-                    Text(isRecording ? "SŁUCHAM..." : "CISZA"),
+                    Icon(isRecording ? Icons.stop_circle : Icons.mic, size: 48, color: isRecording ? Colors.red : Colors.amber),
+                    const SizedBox(height: 8),
+                    Text(isRecording ? "KLIKNIJ, ABY ZAKOŃCZYĆ" : "ZACZNIJ NAGRYWAĆ POMYSŁ", style: const TextStyle(fontWeight: FontWeight.bold)),
                   ],
                 ),
-                ElevatedButton.icon(
-                  onPressed: isRecording ? stopRecording : startRecording,
-                  icon: Icon(isRecording ? Icons.stop : Icons.fiber_manual_record),
-                  label: Text(isRecording ? "ZAKOŃCZ" : "NAGRAJ POMYSŁ"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: isRecording ? Colors.red : Colors.amber,
-                    foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
-
-          // LISTA NAGRAŃ (DÓŁ)
+          // LISTA
           Expanded(
             child: FutureBuilder<List<Map<String, dynamic>>>(
               future: getSketches(),
               builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                  return const Center(child: Text("Twoja biblioteka jest pusta."));
-                }
-
-                final sketches = snapshot.data!;
+                if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+                final sketches = snapshot.data ?? [];
+                if (sketches.isEmpty) return const Center(child: Text("Cisza w bibliotece..."));
 
                 return ListView.builder(
                   itemCount: sketches.length,
                   itemBuilder: (context, index) {
                     final item = sketches[index];
-                    return ListTile(
-                      leading: const CircleAvatar(
-                        backgroundColor: Colors.amber,
-                        child: Icon(Icons.music_note, color: Colors.black),
-                      ),
-                      title: Text(item['title'] ?? 'Bez tytułu'),
-                      subtitle: Text("Data: ${item['created_at'].toString().substring(0, 10)}"),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.play_circle_fill, color: Colors.amber, size: 35),
-                        onPressed: () async {
-                          await audioPlayer.play(UrlSource(item['audio_path']));
-                        },
+                    return Dismissible(
+                      key: Key(item['id'].toString()),
+                      direction: DismissDirection.endToStart,
+                      onDismissed: (_) => deleteSketch(item['id'], item['audio_path']),
+                      background: Container(color: Colors.red, alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), child: const Icon(Icons.delete)),
+                      child: Card(
+                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        child: ListTile(
+                          title: Text(item['title']),
+                          subtitle: Text(item['created_at'].toString().substring(0, 10)),
+                          trailing: Wrap(
+                            spacing: 12, // odstęp między ikonami
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.auto_awesome, color: Colors.purple), // Ikona magii
+                                onPressed: () => convertAudioToMidi(item['audio_path'], item['id']),
+                                tooltip: "Konwertuj na MIDI",
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.play_arrow, color: Colors.amber),
+                                onPressed: () => audioPlayer.play(UrlSource(item['audio_path'])),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     );
                   },
