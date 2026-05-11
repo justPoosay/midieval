@@ -8,7 +8,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Supabase.initialize(
-    url: 'https://bbmpvmdpqbrerjrnzjkk.supabase.co/rest/v1/',
+    url: 'https://bbmpvmdpqbrerjrnzjkk.supabase.co',
     anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJibXB2bWRwcWJyZXJqcm56amtrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg0NTIyMjYsImV4cCI6MjA5NDAyODIyNn0.NhaL48LASXPKvvWMNNP8orswoZKRbUa3L0nyuCjdNj8',
   );
 
@@ -87,17 +87,38 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> stopRecording() async {
     try {
       final path = await audioRecorder.stop();
-      setState(() {
-        isRecording = false;
-      });
-      print("Nagrywanie zakończone. Plik zapisany w: $path");
-      
-      // Tutaj w przyszłości dodamy wysyłanie do Supabase!
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Nagrano barda! Zapisano w $path")),
-      );
+      setState(() => isRecording = false);
+
+      if (path != null) {
+        final file = File(path);
+        final fileName = path.split('/').last;
+
+        // 1. Wysyłanie pliku do Storage
+        await Supabase.instance.client.storage
+            .from('audio-samples')
+            .upload(fileName, file);
+
+        // 2. Pobieranie publicznego linku
+        final String publicUrl = Supabase.instance.client.storage
+            .from('audio-samples')
+            .getPublicUrl(fileName);
+
+        // 3. Zapisanie info w tabeli sketches
+        await Supabase.instance.client.from('sketches').insert({
+          'title': 'Nowe nucenie ${DateTime.now().toIso8601String()}',
+          'audio_path': publicUrl,
+          'notes': 'Nagrano w aplikacji MIDieval',
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Wysłano Barda do chmury! ☁️")),
+        );
+      }
     } catch (e) {
-      print("Błąd przy zatrzymywaniu: $e");
+      print("Błąd wysyłania: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Błąd zapisu w chmurze: $e")),
+      );
     }
   }
 
