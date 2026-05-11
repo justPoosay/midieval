@@ -19,6 +19,15 @@ class MidiEngine {
   static const int _beatsPerMeasure = 4;
   static const int _ticksPerBar = _ticksPerQuarter * _beatsPerMeasure;
   static const int _quantizeTicks = _ticksPerQuarter ~/ 4;
+  static const double _maxSteadyRhythmDeviation = 0.42;
+  static const List<int> _steadyRhythmNoteTicks = [
+    _ticksPerQuarter ~/ 4,
+    _ticksPerQuarter ~/ 2,
+    (_ticksPerQuarter * 3) ~/ 4,
+    _ticksPerQuarter,
+    (_ticksPerQuarter * 3) ~/ 2,
+    _ticksPerQuarter * 2,
+  ];
   static const List<double> _musicalBeatIntervals = [
     0.25,
     0.5,
@@ -645,8 +654,8 @@ class MidiEngine {
     List<_DetectedNote> notes, {
     required int tempoBpm,
   }) {
-    final barAlignedPhrase = _quantizeBarAlignedPhrase(notes);
-    if (barAlignedPhrase != null) return barAlignedPhrase;
+    final steadyPhrase = _quantizeSteadyRhythmPhrase(notes, tempoBpm: tempoBpm);
+    if (steadyPhrase != null) return steadyPhrase;
 
     final beatSeconds = 60 / tempoBpm;
     final quantized = <_QuantizedNote>[];
@@ -696,17 +705,40 @@ class MidiEngine {
     return quantized;
   }
 
-  static List<_QuantizedNote>? _quantizeBarAlignedPhrase(
-    List<_DetectedNote> notes,
-  ) {
-    if (!_shouldUseBarAlignedPhrase(notes)) return null;
+  static List<_QuantizedNote>? _quantizeSteadyRhythmPhrase(
+    List<_DetectedNote> notes, {
+    required int tempoBpm,
+  }) {
+    if (notes.length < 3 || notes.length > 32) return null;
 
-    final barCount = notes.length ~/ _beatsPerMeasure;
-    final phraseTicks = barCount * _ticksPerBar;
-    final noteTicks = phraseTicks ~/ notes.length;
-    if (noteTicks < _quantizeTicks || noteTicks % _quantizeTicks != 0) {
+    final intervals = <double>[];
+    for (var i = 1; i < notes.length; i++) {
+      final interval = notes[i].startSeconds - notes[i - 1].startSeconds;
+      if (interval <= 0) return null;
+      intervals.add(interval);
+    }
+
+    final intervalMedian = _medianDouble(intervals);
+    if (intervalMedian <= 0) return null;
+
+    final relativeDeviations = [
+      for (final interval in intervals)
+        (interval - intervalMedian).abs() / intervalMedian,
+    ];
+    final averageDeviation =
+        relativeDeviations.reduce((a, b) => a + b) / relativeDeviations.length;
+    final medianDeviation = _medianDouble(relativeDeviations);
+    if (averageDeviation > _maxSteadyRhythmDeviation ||
+        medianDeviation > _maxSteadyRhythmDeviation * 0.75) {
       return null;
     }
+
+    final noteTicks = _bestSteadyRhythmTicks(
+      intervalMedian,
+      tempoBpm: tempoBpm,
+      noteCount: notes.length,
+    );
+    if (noteTicks == null) return null;
 
     return [
       for (var i = 0; i < notes.length; i++)
@@ -719,37 +751,46 @@ class MidiEngine {
     ];
   }
 
-  static bool _shouldUseBarAlignedPhrase(List<_DetectedNote> notes) {
-    if (notes.length < _beatsPerMeasure || notes.length > 16) return false;
-    if (notes.length % _beatsPerMeasure != 0) return false;
+  static int? _bestSteadyRhythmTicks(
+    double intervalMedian, {
+    required int tempoBpm,
+    required int noteCount,
+  }) {
+    final beatSeconds = 60 / tempoBpm;
+    if (beatSeconds <= 0) return null;
 
-    final intervals = <double>[];
-    for (var i = 1; i < notes.length; i++) {
-      final interval = notes[i].startSeconds - notes[i - 1].startSeconds;
-      if (interval <= 0) return false;
-      intervals.add(interval);
-    }
+    final observedBeats = intervalMedian / beatSeconds;
+    int? bestTicks;
+    var bestScore = double.infinity;
 
-    if (intervals.isEmpty) return false;
+    for (final ticks in _steadyRhythmNoteTicks) {
+      final candidateBeats = ticks / _ticksPerQuarter;
+      final timingError =
+          (observedBeats - candidateBeats).abs() / candidateBeats;
+      if (timingError > 0.48) continue;
 
-    final intervalMedian = _medianDouble(intervals);
-    if (intervalMedian <= 0) return false;
+      final phraseTicks = noteCount * ticks;
+      final barRemainder = phraseTicks % _ticksPerBar;
+      final barDistance = math.min(
+        barRemainder,
+        barRemainder == 0 ? 0 : _ticksPerBar - barRemainder,
+      );
+      final barPenalty = barDistance / _ticksPerBar * 0.16;
+      final dottedPenalty =
+          ticks == (_ticksPerQuarter * 3) ~/ 4 ||
+              ticks == (_ticksPerQuarter * 3) ~/ 2
+          ? 0.08
+          : 0.0;
+      final sixteenthPenalty = ticks == _ticksPerQuarter ~/ 4 ? 0.04 : 0.0;
+      final score = timingError + barPenalty + dottedPenalty + sixteenthPenalty;
 
-    var relativeDeviationSum = 0.0;
-    for (final interval in intervals) {
-      relativeDeviationSum +=
-          (interval - intervalMedian).abs() / intervalMedian;
-    }
-    final averageRelativeDeviation = relativeDeviationSum / intervals.length;
-    if (averageRelativeDeviation > 0.45) return false;
-
-    var stepwiseMoves = 0;
-    for (var i = 1; i < notes.length; i++) {
-      if ((notes[i].note - notes[i - 1].note).abs() <= 2) {
-        stepwiseMoves++;
+      if (score < bestScore) {
+        bestScore = score;
+        bestTicks = ticks;
       }
     }
-    return stepwiseMoves / (notes.length - 1) >= 0.70;
+
+    return bestScore <= 0.40 ? bestTicks : null;
   }
 
   static double _medianDouble(List<double> values) {

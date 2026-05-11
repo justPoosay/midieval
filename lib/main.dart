@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:record/record.dart';
@@ -32,10 +33,21 @@ class MyApp extends StatelessWidget {
       title: 'MIDieval',
       theme: ThemeData(
         brightness: Brightness.dark,
-        primarySwatch: Colors.amber,
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.amber,
+          seedColor: const Color(0xFFFFC857),
           brightness: Brightness.dark,
+        ),
+        scaffoldBackgroundColor: const Color(0xFF101114),
+        cardTheme: CardThemeData(
+          color: const Color(0xFF1A1C22),
+          elevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+        appBarTheme: const AppBarTheme(
+          centerTitle: false,
+          backgroundColor: Color(0xFF101114),
+          foregroundColor: Color(0xFFF5F2EA),
+          elevation: 0,
         ),
         useMaterial3: true,
       ),
@@ -196,13 +208,19 @@ class _MyHomePageState extends State<MyHomePage> {
   StreamSubscription<void>? _playerCompleteSubscription;
   StreamSubscription<PlayerState>? _playerStateSubscription;
   Timer? _playbackResetTimer;
+  final Map<String, String> _cachedPlaybackPaths = {};
+  final List<Map<String, dynamic>> _sessionSketches = [];
+  List<Map<String, dynamic>> _remoteSketches = [];
+  late Future<List<Map<String, dynamic>>> _sketchesFuture;
+  int _nextLocalSketchId = -1;
   int? _playingSketchId;
   bool isRecording = false;
 
   @override
   void initState() {
     super.initState();
-    unawaited(audioPlayer.setReleaseMode(ReleaseMode.stop));
+    _sketchesFuture = getSketches();
+    unawaited(_configureAudioPlayer());
     _playerCompleteSubscription = audioPlayer.onPlayerComplete.listen((_) {
       _clearPlayingSketch();
     });
@@ -227,12 +245,88 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  Future<void> _configureAudioPlayer({
+    PlayerMode mode = PlayerMode.mediaPlayer,
+  }) async {
+    await audioPlayer.setPlayerMode(mode);
+    await audioPlayer.setReleaseMode(ReleaseMode.stop);
+    await audioPlayer.setAudioContext(
+      const AudioContext(
+        android: AudioContextAndroid(
+          contentType: AndroidContentType.music,
+          usageType: AndroidUsageType.media,
+          audioFocus: AndroidAudioFocus.gainTransient,
+          stayAwake: true,
+        ),
+      ),
+    );
+  }
+
   Future<List<Map<String, dynamic>>> getSketches() async {
     final data = await Supabase.instance.client
         .from('sketches')
         .select()
         .order('created_at', ascending: false);
-    return List<Map<String, dynamic>>.from(data);
+    _remoteSketches = List<Map<String, dynamic>>.from(data);
+    return _mergedSketches();
+  }
+
+  void _refreshSketches() {
+    if (!mounted) return;
+    setState(() {
+      _sketchesFuture = getSketches();
+    });
+  }
+
+  void _showSessionSketches() {
+    if (!mounted) return;
+    setState(() {
+      _sketchesFuture = Future.value(_mergedSketches());
+    });
+  }
+
+  List<Map<String, dynamic>> _mergedSketches() {
+    final sessionIds = _sessionSketches.map((sketch) => sketch['id']).toSet();
+    final sessionPaths = _sessionSketches
+        .map((sketch) => sketch['audio_path'])
+        .toSet();
+    return [
+      ..._sessionSketches,
+      ..._remoteSketches.where(
+        (sketch) =>
+            !sessionIds.contains(sketch['id']) &&
+            !sessionPaths.contains(sketch['audio_path']),
+      ),
+    ];
+  }
+
+  void _upsertSessionSketch(Map<String, dynamic> sketch) {
+    final index = _sessionSketches.indexWhere(
+      (item) => item['id'] == sketch['id'],
+    );
+    if (index >= 0) {
+      _sessionSketches[index] = sketch;
+    } else {
+      _sessionSketches.insert(0, sketch);
+    }
+    _showSessionSketches();
+  }
+
+  void _replaceSessionSketch(int previousId, Map<String, dynamic> replacement) {
+    final index = _sessionSketches.indexWhere(
+      (item) => item['id'] == previousId,
+    );
+    if (index >= 0) {
+      _sessionSketches[index] = replacement;
+    } else {
+      _sessionSketches.insert(0, replacement);
+    }
+    _showSessionSketches();
+  }
+
+  void _removeSessionSketch(int id) {
+    _sessionSketches.removeWhere((item) => item['id'] == id);
+    _showSessionSketches();
   }
 
   Future<void> startRecording() async {
@@ -262,6 +356,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> stopRecording() async {
+    int? localId;
     try {
       final path = await audioRecorder.stop();
       setState(() => isRecording = false);
@@ -270,6 +365,20 @@ class _MyHomePageState extends State<MyHomePage> {
         final file = File(path);
         final fileName = "voice_${DateTime.now().millisecondsSinceEpoch}.wav";
         final userId = Supabase.instance.client.auth.currentUser!.id;
+        final createdAt = DateTime.now();
+        final title = 'Nucenie ${createdAt.hour}:${createdAt.minute}';
+        localId = _nextLocalSketchId--;
+        final localSketch = <String, dynamic>{
+          'id': localId,
+          'user_id': userId,
+          'title': title,
+          'audio_path': path,
+          'created_at': createdAt.toIso8601String(),
+          '_is_uploading': true,
+        };
+
+        _cachedPlaybackPaths[path] = path;
+        _upsertSessionSketch(localSketch);
 
         // 1. Upload do Storage
         await Supabase.instance.client.storage
@@ -284,18 +393,38 @@ class _MyHomePageState extends State<MyHomePage> {
         final String publicUrl = Supabase.instance.client.storage
             .from('audio-samples')
             .getPublicUrl(fileName);
+        _cachedPlaybackPaths[publicUrl] = path;
 
         // 3. Zapis w DB
-        await Supabase.instance.client.from('sketches').insert({
-          'user_id': userId,
-          'title': 'Nucenie ${DateTime.now().hour}:${DateTime.now().minute}',
-          'audio_path': publicUrl,
-        });
+        final inserted = await Supabase.instance.client
+            .from('sketches')
+            .insert({
+              'user_id': userId,
+              'title': title,
+              'audio_path': publicUrl,
+            })
+            .select()
+            .single();
+        final remoteSketch = Map<String, dynamic>.from(inserted);
+        _replaceSessionSketch(localId, remoteSketch);
 
-        setState(() {}); // Odśwież listę
+        unawaited(getSketches().then((_) => _showSessionSketches()));
       }
     } catch (e) {
       debugPrint("Błąd wysyłki: $e");
+      if (localId != null) {
+        final index = _sessionSketches.indexWhere(
+          (item) => item['id'] == localId,
+        );
+        if (index >= 0) {
+          _sessionSketches[index] = {
+            ..._sessionSketches[index],
+            '_is_uploading': false,
+            '_upload_failed': true,
+          };
+          _showSessionSketches();
+        }
+      }
     }
   }
 
@@ -305,12 +434,74 @@ class _MyHomePageState extends State<MyHomePage> {
       _clearPlayingSketch();
     }
 
+    if (id < 0) {
+      _removeSessionSketch(id);
+      await _removeCachedPlaybackFile(filePath);
+      final localFile = File(filePath);
+      if (await localFile.exists()) {
+        await localFile.delete();
+      }
+      return;
+    }
+
     final fileName = filePath.split('/').last;
     await Supabase.instance.client.from('sketches').delete().match({'id': id});
     await Supabase.instance.client.storage.from('audio-samples').remove([
       fileName,
     ]);
-    setState(() {});
+    await _removeCachedPlaybackFile(filePath);
+    _removeSessionSketch(id);
+    _refreshSketches();
+  }
+
+  Future<String> _localPlaybackPathForUrl(String audioUrl) async {
+    final directFile = File(audioUrl);
+    if (await directFile.exists() && await directFile.length() > 0) {
+      return audioUrl;
+    }
+
+    final cachedPath = _cachedPlaybackPaths[audioUrl];
+    if (cachedPath != null) {
+      final cachedFile = File(cachedPath);
+      if (await cachedFile.exists() && await cachedFile.length() > 0) {
+        return cachedPath;
+      }
+    }
+
+    final uri = Uri.parse(audioUrl);
+    final response = await http.get(uri);
+    if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
+      throw Exception("Nie udało się pobrać pliku audio do odtworzenia");
+    }
+
+    final tempDirectory = await getTemporaryDirectory();
+    final playbackDirectory = Directory(
+      '${tempDirectory.path}/midieval_playback',
+    );
+    if (!await playbackDirectory.exists()) {
+      await playbackDirectory.create(recursive: true);
+    }
+
+    final sourceName = uri.pathSegments.isEmpty
+        ? 'clip.wav'
+        : uri.pathSegments.last;
+    final safeName = sourceName.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    final fileName = '${audioUrl.hashCode}_$safeName';
+    final localFile = File('${playbackDirectory.path}/$fileName');
+    await localFile.writeAsBytes(response.bodyBytes, flush: true);
+
+    _cachedPlaybackPaths[audioUrl] = localFile.path;
+    return localFile.path;
+  }
+
+  Future<void> _removeCachedPlaybackFile(String audioUrl) async {
+    final cachedPath = _cachedPlaybackPaths.remove(audioUrl);
+    if (cachedPath == null) return;
+
+    final cachedFile = File(cachedPath);
+    if (await cachedFile.exists()) {
+      await cachedFile.delete();
+    }
   }
 
   Future<void> playOrStopSketch(int sketchId, String audioUrl) async {
@@ -322,21 +513,20 @@ class _MyHomePageState extends State<MyHomePage> {
       }
 
       _playbackResetTimer?.cancel();
-      await audioPlayer.stop();
-      await audioPlayer.play(UrlSource(audioUrl));
+      await audioPlayer.release();
+      final localPlaybackPath = await _localPlaybackPathForUrl(audioUrl);
+      await _configureAudioPlayerForSource(localPlaybackPath);
+      final playbackDuration = await _playbackDurationForPath(
+        localPlaybackPath,
+      );
+      await audioPlayer.setSourceDeviceFile(localPlaybackPath);
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      await audioPlayer.resume();
 
       if (mounted) {
         setState(() => _playingSketchId = sketchId);
       }
-
-      final duration = await audioPlayer.getDuration();
-      if (duration != null) {
-        _playbackResetTimer = Timer(duration + const Duration(seconds: 1), () {
-          if (_playingSketchId == sketchId) {
-            _clearPlayingSketch();
-          }
-        });
-      }
+      _schedulePlaybackReset(sketchId, playbackDuration);
     } catch (e) {
       debugPrint("Błąd odtwarzania: $e");
       if (mounted) {
@@ -349,6 +539,88 @@ class _MyHomePageState extends State<MyHomePage> {
         );
       }
     }
+  }
+
+  void _schedulePlaybackReset(int sketchId, Duration? duration) {
+    _playbackResetTimer?.cancel();
+    if (duration == null) return;
+
+    _playbackResetTimer = Timer(
+      duration + const Duration(milliseconds: 350),
+      () {
+        if (_playingSketchId == sketchId) {
+          _clearPlayingSketch();
+        }
+      },
+    );
+  }
+
+  Future<Duration?> _playbackDurationForPath(String sourcePath) async {
+    final extension = sourcePath.split('.').last.toLowerCase();
+    if (extension == 'wav') {
+      return _wavDuration(sourcePath);
+    }
+
+    return null;
+  }
+
+  Future<Duration?> _wavDuration(String path) async {
+    final bytes = await File(path).readAsBytes();
+    if (bytes.length < 44 ||
+        String.fromCharCodes(bytes.sublist(0, 4)) != 'RIFF' ||
+        String.fromCharCodes(bytes.sublist(8, 12)) != 'WAVE') {
+      return null;
+    }
+
+    var offset = 12;
+    int? sampleRate;
+    int? byteRate;
+    int? dataSize;
+
+    while (offset + 8 <= bytes.length) {
+      final chunkId = String.fromCharCodes(bytes.sublist(offset, offset + 4));
+      final chunkSize = _readUint32LittleEndian(bytes, offset + 4);
+      final chunkDataOffset = offset + 8;
+
+      if (chunkId == 'fmt ' && chunkSize >= 16) {
+        sampleRate = _readUint32LittleEndian(bytes, chunkDataOffset + 4);
+        byteRate = _readUint32LittleEndian(bytes, chunkDataOffset + 8);
+      } else if (chunkId == 'data') {
+        dataSize = chunkSize;
+      }
+
+      offset = chunkDataOffset + chunkSize + (chunkSize.isOdd ? 1 : 0);
+    }
+
+    final bytesPerSecond = byteRate ?? sampleRate;
+    if (bytesPerSecond == null || bytesPerSecond <= 0 || dataSize == null) {
+      return null;
+    }
+
+    return Duration(milliseconds: ((dataSize / bytesPerSecond) * 1000).round());
+  }
+
+  int _readUint32LittleEndian(List<int> bytes, int offset) {
+    return bytes[offset] |
+        (bytes[offset + 1] << 8) |
+        (bytes[offset + 2] << 16) |
+        (bytes[offset + 3] << 24);
+  }
+
+  Future<void> _configureAudioPlayerForSource(String sourcePath) async {
+    final extension = sourcePath.split('.').last.toLowerCase();
+    final mode = extension == 'wav'
+        ? PlayerMode.lowLatency
+        : PlayerMode.mediaPlayer;
+    await _configureAudioPlayer(mode: mode);
+  }
+
+  Future<Uint8List> _downloadAudioBytes(String audioUrl) async {
+    final response = await http.get(Uri.parse(audioUrl));
+    if (response.statusCode != 200) {
+      throw Exception("Nie udało się pobrać pliku audio");
+    }
+    return response.bodyBytes;
   }
 
   void _showSuccessDialog() {
@@ -380,11 +652,13 @@ class _MyHomePageState extends State<MyHomePage> {
       );
 
       // 2. Pobieramy nagrany plik audio z Supabase
-      final response = await http.get(Uri.parse(audioUrl));
-      if (response.statusCode != 200) {
-        throw Exception("Nie udało się pobrać pliku audio");
+      final localAudioFile = File(audioUrl);
+      final Uint8List audioBytes;
+      if (await localAudioFile.exists()) {
+        audioBytes = await localAudioFile.readAsBytes();
+      } else {
+        audioBytes = await _downloadAudioBytes(audioUrl);
       }
-      final audioBytes = response.bodyBytes;
 
       // 3. Wywołujemy silnik z osobnego pliku (ten, który ma tylko 1 nutę)
       final midiBytes = MidiEngine.generateMidiFromAudio(audioBytes);
@@ -423,7 +697,8 @@ class _MyHomePageState extends State<MyHomePage> {
       // 8. Sukces!
       if (mounted) {
         _showSuccessDialog();
-        setState(() {}); // Odświeżamy listę, żeby zobaczyć nową ikonkę/tytuł
+        _sessionSketches.removeWhere((item) => item['id'] == sketchId);
+        _refreshSketches();
       }
     } catch (e) {
       debugPrint("BŁĄD KONWERSJI: $e");
@@ -447,9 +722,14 @@ class _MyHomePageState extends State<MyHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Moje Nucenia"),
+        title: const Text(
+          "MIDieval",
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.logout),
@@ -464,121 +744,210 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          // PANEL NAGRYWANIA
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: InkWell(
-              onTap: isRecording ? stopRecording : startRecording,
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: isRecording
-                      ? Colors.red.withValues(alpha: 0.2)
-                      : Colors.amber.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: isRecording ? Colors.red : Colors.amber,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // PANEL NAGRYWANIA
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+              child: Material(
+                color: isRecording
+                    ? const Color(0xFF2A171A)
+                    : const Color(0xFF1A1C22),
+                borderRadius: BorderRadius.circular(8),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: isRecording ? stopRecording : startRecording,
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: isRecording
+                            ? Colors.redAccent
+                            : colorScheme.primary.withValues(alpha: 0.65),
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        Icon(
+                          isRecording ? Icons.stop_circle : Icons.mic,
+                          size: 48,
+                          color: isRecording
+                              ? Colors.redAccent
+                              : colorScheme.primary,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          isRecording
+                              ? "Tap to stop and save"
+                              : "Record a melody",
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          isRecording
+                              ? "Saving as a 44.1 kHz WAV clip"
+                              : "Hum or sing a short phrase",
+                          style: TextStyle(color: colorScheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                child: Column(
-                  children: [
-                    Icon(
-                      isRecording ? Icons.stop_circle : Icons.mic,
-                      size: 48,
-                      color: isRecording ? Colors.red : Colors.amber,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      isRecording
-                          ? "KLIKNIJ, ABY ZAKOŃCZYĆ"
-                          : "ZACZNIJ NAGRYWAĆ POMYSŁ",
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ],
                 ),
               ),
             ),
-          ),
-          // LISTA
-          Expanded(
-            child: FutureBuilder<List<Map<String, dynamic>>>(
-              future: getSketches(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                final sketches = snapshot.data ?? [];
-                if (sketches.isEmpty) {
-                  return const Center(child: Text("Cisza w bibliotece..."));
-                }
-
-                return ListView.builder(
-                  itemCount: sketches.length,
-                  itemBuilder: (context, index) {
-                    final item = sketches[index];
-                    final itemId = item['id'] as int;
-                    final audioPath = item['audio_path'] as String;
-                    final isPlaying = _playingSketchId == itemId;
-
-                    return Dismissible(
-                      key: Key(itemId.toString()),
-                      direction: DismissDirection.endToStart,
-                      onDismissed: (_) => deleteSketch(itemId, audioPath),
-                      background: Container(
-                        color: Colors.red,
-                        alignment: Alignment.centerRight,
-                        padding: const EdgeInsets.only(right: 20),
-                        child: const Icon(Icons.delete),
-                      ),
-                      child: Card(
-                        margin: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 4,
-                        ),
-                        child: ListTile(
-                          title: Text(item['title']),
-                          subtitle: Text(
-                            item['created_at'].toString().substring(0, 10),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Row(
+                children: [
+                  const Text(
+                    "Sketches",
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: "Refresh",
+                    onPressed: _refreshSketches,
+                    icon: const Icon(Icons.refresh),
+                  ),
+                ],
+              ),
+            ),
+            // LISTA
+            Expanded(
+              child: FutureBuilder<List<Map<String, dynamic>>>(
+                future: _sketchesFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  final sketches = snapshot.data ?? [];
+                  if (sketches.isEmpty) {
+                    return Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.library_music,
+                            size: 48,
+                            color: colorScheme.onSurfaceVariant,
                           ),
-                          trailing: Wrap(
-                            spacing: 12, // odstęp między ikonami
-                            children: [
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.auto_awesome,
-                                  color: Colors.purple,
-                                ), // Ikona magii
-                                onPressed: () =>
-                                    convertAudioToMidi(audioPath, itemId),
-                                tooltip: "Konwertuj na MIDI",
-                              ),
-                              IconButton(
-                                icon: Icon(
-                                  isPlaying
-                                      ? Icons.stop_circle
-                                      : Icons.play_arrow,
-                                  color: isPlaying ? Colors.red : Colors.amber,
-                                ),
-                                onPressed: () =>
-                                    playOrStopSketch(itemId, audioPath),
-                                tooltip: isPlaying
-                                    ? "Zatrzymaj odtwarzanie"
-                                    : "Odtwórz klip",
-                              ),
-                            ],
+                          const SizedBox(height: 12),
+                          const Text(
+                            "No sketches yet",
+                            style: TextStyle(fontWeight: FontWeight.w700),
                           ),
-                        ),
+                        ],
                       ),
                     );
-                  },
-                );
-              },
+                  }
+
+                  return ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+                    itemCount: sketches.length,
+                    itemBuilder: (context, index) {
+                      final item = sketches[index];
+                      final itemId = item['id'] as int;
+                      final audioPath = item['audio_path'] as String;
+                      final isPlaying = _playingSketchId == itemId;
+                      final isUploading = item['_is_uploading'] == true;
+                      final uploadFailed = item['_upload_failed'] == true;
+
+                      return Dismissible(
+                        key: Key(itemId.toString()),
+                        direction: DismissDirection.endToStart,
+                        onDismissed: (_) => deleteSketch(itemId, audioPath),
+                        background: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.redAccent.withValues(alpha: 0.22),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          alignment: Alignment.centerRight,
+                          padding: const EdgeInsets.only(right: 20),
+                          child: const Icon(
+                            Icons.delete_outline,
+                            color: Colors.redAccent,
+                          ),
+                        ),
+                        child: Card(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 6,
+                            ),
+                            leading: Container(
+                              width: 42,
+                              height: 42,
+                              decoration: BoxDecoration(
+                                color: colorScheme.primary.withValues(
+                                  alpha: 0.16,
+                                ),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Icon(
+                                Icons.graphic_eq,
+                                color: colorScheme.primary,
+                              ),
+                            ),
+                            title: Text(
+                              isUploading
+                                  ? '${item['title']} (uploading...)'
+                                  : uploadFailed
+                                  ? '${item['title']} (local only)'
+                                  : item['title'],
+                            ),
+                            subtitle: Text(
+                              item['created_at'].toString().substring(0, 10),
+                            ),
+                            trailing: Wrap(
+                              spacing: 12, // odstęp między ikonami
+                              children: [
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.auto_awesome,
+                                    color: Colors.deepPurpleAccent,
+                                  ), // Ikona magii
+                                  onPressed: isUploading
+                                      ? null
+                                      : () => convertAudioToMidi(
+                                          audioPath,
+                                          itemId,
+                                        ),
+                                  tooltip: "Konwertuj na MIDI",
+                                ),
+                                IconButton(
+                                  icon: Icon(
+                                    isPlaying
+                                        ? Icons.stop_circle
+                                        : Icons.play_arrow,
+                                    color: isPlaying
+                                        ? Colors.redAccent
+                                        : colorScheme.primary,
+                                  ),
+                                  onPressed: () =>
+                                      playOrStopSketch(itemId, audioPath),
+                                  tooltip: isPlaying
+                                      ? "Zatrzymaj odtwarzanie"
+                                      : "Odtwórz klip",
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

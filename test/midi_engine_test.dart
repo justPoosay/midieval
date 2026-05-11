@@ -78,6 +78,18 @@ void main() {
     expect(events.last.tick + noteDurations.last, 3840);
   });
 
+  test('snaps a steady sung phrase with leaps to quarter-note timing', () {
+    final wavBytes = _steadySungPhraseWav();
+
+    final midiBytes = MidiEngine.generateMidiFromAudio(wavBytes);
+    final events = _noteOnEvents(midiBytes);
+    final noteDurations = _noteDurations(midiBytes);
+
+    expect(events.map((event) => event.note), [60, 64, 67, 72, 67, 64]);
+    expect(events.map((event) => event.tick), [0, 480, 960, 1440, 1920, 2400]);
+    expect(noteDurations, everyElement(480));
+  });
+
   test(
     'rejects compressed audio bytes instead of guessing from container data',
     () {
@@ -185,6 +197,73 @@ Uint8List _hummedMajorScaleWav({
       samples[offset + i] = 0;
     }
     offset += gapSamples;
+  }
+
+  return Wav([samples], sampleRate).write();
+}
+
+Uint8List _steadySungPhraseWav() {
+  const sampleRate = 44100;
+  const notes = [60, 64, 67, 72, 67, 64];
+  final noteLengths = [0.38, 0.47, 0.40, 0.52, 0.43, 0.50];
+  final gapLengths = [0.16, 0.09, 0.18, 0.08, 0.13];
+  final totalSamples =
+      noteLengths.fold<int>(
+        0,
+        (sum, seconds) => sum + (sampleRate * seconds).round(),
+      ) +
+      gapLengths.fold<int>(
+        0,
+        (sum, seconds) => sum + (sampleRate * seconds).round(),
+      );
+  final samples = Float64List(totalSamples);
+
+  var offset = 0;
+  double? previousFrequency;
+  for (var noteIndex = 0; noteIndex < notes.length; noteIndex++) {
+    final note = notes[noteIndex];
+    final noteSamples = (sampleRate * noteLengths[noteIndex]).round();
+    final targetFrequency = _midiFrequency(note);
+    var phase = 0.0;
+    var secondPhase = 0.0;
+    var thirdPhase = 0.0;
+
+    for (var i = 0; i < noteSamples; i++) {
+      final absoluteSeconds = (offset + i) / sampleRate;
+      final progress = i / noteSamples;
+      final consonantEnvelope = progress < 0.04
+          ? math.pow(1 - progress / 0.04, 2).toDouble()
+          : 0.0;
+      final vibratoCents = 18 * math.sin(2 * math.pi * 5.4 * absoluteSeconds);
+      final glide = previousFrequency == null || progress > 0.10
+          ? targetFrequency
+          : _lerp(
+              previousFrequency,
+              targetFrequency,
+              _smoothStep(progress / 0.10),
+            );
+      final frequency = glide * math.pow(2, vibratoCents / 1200);
+      final envelope = _testEnvelope(i, noteSamples);
+
+      phase += 2 * math.pi * frequency / sampleRate;
+      secondPhase += 2 * math.pi * frequency * 2 / sampleRate;
+      thirdPhase += 2 * math.pi * frequency * 3 / sampleRate;
+      final vowel =
+          math.sin(phase) * 0.54 +
+          math.sin(secondPhase) * 0.28 +
+          math.sin(thirdPhase) * 0.14;
+      final consonant =
+          math.sin(2 * math.pi * 1900 * absoluteSeconds) *
+          0.18 *
+          consonantEnvelope;
+      samples[offset + i] = (vowel * envelope + consonant) * 0.78;
+    }
+
+    previousFrequency = targetFrequency;
+    offset += noteSamples;
+    if (noteIndex < gapLengths.length) {
+      offset += (sampleRate * gapLengths[noteIndex]).round();
+    }
   }
 
   return Wav([samples], sampleRate).write();
