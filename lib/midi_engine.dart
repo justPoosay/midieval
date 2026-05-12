@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:wav/wav.dart';
@@ -60,6 +61,15 @@ class MidiEngine {
     160,
     180,
   ];
+  static _RhythmLanguageModel? _rhythmLanguageModel;
+
+  static void configureRhythmLanguageModel(Uint8List jsonBytes) {
+    final decoded = jsonDecode(utf8.decode(jsonBytes));
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('Invalid rhythm language model JSON');
+    }
+    _rhythmLanguageModel = _RhythmLanguageModel.fromJson(decoded);
+  }
 
   static Uint8List generateSineSequenceWav({
     List<int> midiNotes = const [72, 74, 76, 77, 79, 81, 83, 84],
@@ -654,6 +664,14 @@ class MidiEngine {
     List<_DetectedNote> notes, {
     required int tempoBpm,
   }) {
+    final languageModelQuantized = _quantizeWithLanguageModel(
+      notes,
+      tempoBpm: tempoBpm,
+    );
+    if (languageModelQuantized != null) {
+      return languageModelQuantized;
+    }
+
     final steadyPhrase = _quantizeSteadyRhythmPhrase(notes, tempoBpm: tempoBpm);
     if (steadyPhrase != null) return steadyPhrase;
 
@@ -699,6 +717,88 @@ class MidiEngine {
       final maxDuration = math.max(_quantizeTicks, availableTicks);
       if (current.durationTicks > maxDuration) {
         quantized[i] = current.copyWith(durationTicks: maxDuration);
+      }
+    }
+
+    return quantized;
+  }
+
+  static List<_QuantizedNote>? _quantizeWithLanguageModel(
+    List<_DetectedNote> notes, {
+    required int tempoBpm,
+  }) {
+    final model = _rhythmLanguageModel;
+    if (model == null || notes.length < 2) return null;
+
+    final beatSeconds = 60 / tempoBpm;
+    if (beatSeconds <= 0) return null;
+
+    final intervalTicks = <int>[];
+    for (var i = 1; i < notes.length; i++) {
+      final interval = notes[i].startSeconds - notes[i - 1].startSeconds;
+      if (interval <= 0) return null;
+      final rawTicks = (interval / beatSeconds * _ticksPerQuarter).round();
+      intervalTicks.add(rawTicks.clamp(_quantizeTicks, _ticksPerQuarter * 4));
+    }
+
+    final candidateTicks = _steadyRhythmNoteTicks;
+    var beams = <_RhythmBeam>[
+      const _RhythmBeam(tokens: [], score: 0, totalTicks: 0),
+    ];
+    const beamSize = 12;
+
+    for (var i = 0; i < intervalTicks.length; i++) {
+      final observed = intervalTicks[i];
+      final nextBeams = <_RhythmBeam>[];
+      for (final beam in beams) {
+        for (final tick in candidateTicks) {
+          final timingError = (observed - tick).abs() / math.max(tick, 1);
+          if (timingError > 0.65) continue;
+          final lmPenalty = model.transitionPenalty(
+            beam.tokens.isEmpty ? null : beam.tokens.last,
+            tick,
+          );
+          final dottedPenalty =
+              tick == (_ticksPerQuarter * 3) ~/ 4 ||
+                  tick == (_ticksPerQuarter * 3) ~/ 2
+              ? 0.10
+              : 0.0;
+          final score = beam.score + timingError + lmPenalty + dottedPenalty;
+          nextBeams.add(
+            _RhythmBeam(
+              tokens: [...beam.tokens, tick],
+              score: score,
+              totalTicks: beam.totalTicks + tick,
+            ),
+          );
+        }
+      }
+
+      if (nextBeams.isEmpty) return null;
+      nextBeams.sort((a, b) => a.score.compareTo(b.score));
+      beams = nextBeams.take(math.min(beamSize, nextBeams.length)).toList();
+    }
+
+    if (beams.isEmpty) return null;
+    final best = beams.first;
+    if (best.tokens.length != notes.length - 1) return null;
+
+    final quantized = <_QuantizedNote>[];
+    var startTick = 0;
+    for (var i = 0; i < notes.length; i++) {
+      final durationTick = i < best.tokens.length
+          ? best.tokens[i]
+          : best.tokens.last;
+      quantized.add(
+        _QuantizedNote(
+          note: notes[i].note,
+          startTick: startTick,
+          durationTicks: durationTick,
+          velocity: notes[i].velocity,
+        ),
+      );
+      if (i < best.tokens.length) {
+        startTick += best.tokens[i];
       }
     }
 
@@ -995,4 +1095,65 @@ class _MidiEvent {
   final bool isNoteOn;
   final int note;
   final int velocity;
+}
+
+class _RhythmLanguageModel {
+  _RhythmLanguageModel({
+    required this.unigramPenalty,
+    required this.bigramPenalty,
+  });
+
+  factory _RhythmLanguageModel.fromJson(Map<String, dynamic> json) {
+    final unigram = <int, double>{};
+    final bigram = <String, double>{};
+
+    final unigramJson = json['unigram_penalty'];
+    if (unigramJson is Map) {
+      unigramJson.forEach((key, value) {
+        final tick = int.tryParse(key.toString());
+        final penalty = (value as num?)?.toDouble();
+        if (tick != null && penalty != null) {
+          unigram[tick] = penalty;
+        }
+      });
+    }
+
+    final bigramJson = json['bigram_penalty'];
+    if (bigramJson is Map) {
+      bigramJson.forEach((key, value) {
+        final penalty = (value as num?)?.toDouble();
+        if (penalty != null) {
+          bigram[key.toString()] = penalty;
+        }
+      });
+    }
+
+    return _RhythmLanguageModel(
+      unigramPenalty: unigram,
+      bigramPenalty: bigram,
+    );
+  }
+
+  final Map<int, double> unigramPenalty;
+  final Map<String, double> bigramPenalty;
+
+  double transitionPenalty(int? previousTick, int tick) {
+    if (previousTick == null) {
+      return unigramPenalty[tick] ?? 0.85;
+    }
+    final key = '$previousTick->$tick';
+    return bigramPenalty[key] ?? (unigramPenalty[tick] ?? 0.85);
+  }
+}
+
+class _RhythmBeam {
+  const _RhythmBeam({
+    required this.tokens,
+    required this.score,
+    required this.totalTicks,
+  });
+
+  final List<int> tokens;
+  final double score;
+  final int totalTicks;
 }

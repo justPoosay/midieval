@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
@@ -219,6 +219,7 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
+    unawaited(_loadRhythmModel());
     _sketchesFuture = getSketches();
     unawaited(_configureAudioPlayer());
     _playerCompleteSubscription = audioPlayer.onPlayerComplete.listen((_) {
@@ -229,6 +230,16 @@ class _MyHomePageState extends State<MyHomePage> {
         _clearPlayingSketch();
       }
     });
+  }
+
+  Future<void> _loadRhythmModel() async {
+    try {
+      final bytes = await rootBundle.load('assets/models/rhythm_lm.json');
+      MidiEngine.configureRhythmLanguageModel(bytes.buffer.asUint8List());
+      debugPrint('Loaded rhythm language model');
+    } catch (e) {
+      debugPrint('Rhythm model not found, fallback quantizer enabled: $e');
+    }
   }
 
   void _clearPlayingSketch() {

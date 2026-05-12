@@ -52,3 +52,11 @@ flutter test test/midi_engine_test.dart
 ## Notes
 
 The converter currently expects WAV/PCM input. Older recordings stored as compressed formats need to be recorded again with the current WAV recording flow before conversion.
+
+## Local Model Branch
+
+The `llm-midi-converter` branch introduces a trainable rhythm language model to replace hard-coded rhythm snapping heuristics.
+
+Training guide:
+
+- [readme/llm_training.md](readme/llm_training.md)
