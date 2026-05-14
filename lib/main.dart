@@ -208,13 +208,18 @@ class _MyHomePageState extends State<MyHomePage> {
   StreamSubscription<void>? _playerCompleteSubscription;
   StreamSubscription<PlayerState>? _playerStateSubscription;
   Timer? _playbackResetTimer;
-  final Map<String, String> _cachedPlaybackPaths = {};
   final List<Map<String, dynamic>> _sessionSketches = [];
   List<Map<String, dynamic>> _remoteSketches = [];
   late Future<List<Map<String, dynamic>>> _sketchesFuture;
   int _nextLocalSketchId = -1;
   int? _playingSketchId;
   bool isRecording = false;
+  final TextEditingController _timeSigTopController = TextEditingController(
+    text: '4',
+  );
+  final TextEditingController _timeSigBottomController = TextEditingController(
+    text: '4',
+  );
 
   @override
   void initState() {
@@ -255,7 +260,7 @@ class _MyHomePageState extends State<MyHomePage> {
         android: AudioContextAndroid(
           contentType: AndroidContentType.music,
           usageType: AndroidUsageType.media,
-          audioFocus: AndroidAudioFocus.gainTransient,
+          audioFocus: AndroidAudioFocus.gain,
           stayAwake: true,
         ),
       ),
@@ -377,7 +382,6 @@ class _MyHomePageState extends State<MyHomePage> {
           '_is_uploading': true,
         };
 
-        _cachedPlaybackPaths[path] = path;
         _upsertSessionSketch(localSketch);
 
         // 1. Upload do Storage
@@ -393,8 +397,6 @@ class _MyHomePageState extends State<MyHomePage> {
         final String publicUrl = Supabase.instance.client.storage
             .from('audio-samples')
             .getPublicUrl(fileName);
-        _cachedPlaybackPaths[publicUrl] = path;
-
         // 3. Zapis w DB
         final inserted = await Supabase.instance.client
             .from('sketches')
@@ -436,7 +438,6 @@ class _MyHomePageState extends State<MyHomePage> {
 
     if (id < 0) {
       _removeSessionSketch(id);
-      await _removeCachedPlaybackFile(filePath);
       final localFile = File(filePath);
       if (await localFile.exists()) {
         await localFile.delete();
@@ -449,61 +450,13 @@ class _MyHomePageState extends State<MyHomePage> {
     await Supabase.instance.client.storage.from('audio-samples').remove([
       fileName,
     ]);
-    await _removeCachedPlaybackFile(filePath);
     _removeSessionSketch(id);
     _refreshSketches();
   }
 
   Future<String> _localPlaybackPathForUrl(String audioUrl) async {
-    final directFile = File(audioUrl);
-    if (await directFile.exists() && await directFile.length() > 0) {
-      return audioUrl;
-    }
-
-    final cachedPath = _cachedPlaybackPaths[audioUrl];
-    if (cachedPath != null) {
-      final cachedFile = File(cachedPath);
-      if (await cachedFile.exists() && await cachedFile.length() > 0) {
-        return cachedPath;
-      }
-    }
-
-    final uri = Uri.parse(audioUrl);
-    final response = await http.get(uri);
-    if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
-      throw Exception("Nie udało się pobrać pliku audio do odtworzenia");
-    }
-
-    final tempDirectory = await getTemporaryDirectory();
-    final playbackDirectory = Directory(
-      '${tempDirectory.path}/midieval_playback',
-    );
-    if (!await playbackDirectory.exists()) {
-      await playbackDirectory.create(recursive: true);
-    }
-
-    final sourceName = uri.pathSegments.isEmpty
-        ? 'clip.wav'
-        : uri.pathSegments.last;
-    final safeName = sourceName.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
-    final fileName = '${audioUrl.hashCode}_$safeName';
-    final localFile = File('${playbackDirectory.path}/$fileName');
-    await localFile.writeAsBytes(response.bodyBytes, flush: true);
-
-    _cachedPlaybackPaths[audioUrl] = localFile.path;
-    return localFile.path;
+    return audioUrl;
   }
-
-  Future<void> _removeCachedPlaybackFile(String audioUrl) async {
-    final cachedPath = _cachedPlaybackPaths.remove(audioUrl);
-    if (cachedPath == null) return;
-
-    final cachedFile = File(cachedPath);
-    if (await cachedFile.exists()) {
-      await cachedFile.delete();
-    }
-  }
-
   Future<void> playOrStopSketch(int sketchId, String audioUrl) async {
     try {
       if (_playingSketchId == sketchId) {
@@ -513,14 +466,18 @@ class _MyHomePageState extends State<MyHomePage> {
       }
 
       _playbackResetTimer?.cancel();
-      await audioPlayer.release();
-      final localPlaybackPath = await _localPlaybackPathForUrl(audioUrl);
-      await _configureAudioPlayerForSource(localPlaybackPath);
-      final playbackDuration = await _playbackDurationForPath(
-        localPlaybackPath,
-      );
-      await audioPlayer.setSourceDeviceFile(localPlaybackPath);
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+      final sourcePath = await _localPlaybackPathForUrl(audioUrl);
+      final localFile = File(sourcePath);
+      final isLocalFile = await localFile.exists();
+      final playbackDuration = isLocalFile
+          ? await _playbackDurationForPath(sourcePath)
+          : null;
+      await audioPlayer.stop();
+      if (isLocalFile) {
+        await audioPlayer.setSourceDeviceFile(sourcePath);
+      } else {
+        await audioPlayer.setSourceUrl(sourcePath);
+      }
       await audioPlayer.resume();
 
       if (mounted) {
@@ -607,14 +564,6 @@ class _MyHomePageState extends State<MyHomePage> {
         (bytes[offset + 3] << 24);
   }
 
-  Future<void> _configureAudioPlayerForSource(String sourcePath) async {
-    final extension = sourcePath.split('.').last.toLowerCase();
-    final mode = extension == 'wav'
-        ? PlayerMode.lowLatency
-        : PlayerMode.mediaPlayer;
-    await _configureAudioPlayer(mode: mode);
-  }
-
   Future<Uint8List> _downloadAudioBytes(String audioUrl) async {
     final response = await http.get(Uri.parse(audioUrl));
     if (response.statusCode != 200) {
@@ -641,6 +590,20 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
+  int _parsedTimeSigTop() {
+    final parsed = int.tryParse(_timeSigTopController.text.trim());
+    if (parsed == null) return 4;
+    return parsed.clamp(1, 12).toInt();
+  }
+
+  int _parsedTimeSigBottom() {
+    final parsed = int.tryParse(_timeSigBottomController.text.trim());
+    if (parsed == null) return 4;
+    const valid = [1, 2, 4, 8, 16, 32];
+    if (!valid.contains(parsed)) return 4;
+    return parsed;
+  }
+
   Future<void> convertAudioToMidi(String audioUrl, int sketchId) async {
     try {
       // 1. Informujemy użytkownika o starcie
@@ -661,7 +624,11 @@ class _MyHomePageState extends State<MyHomePage> {
       }
 
       // 3. Wywołujemy silnik z osobnego pliku (ten, który ma tylko 1 nutę)
-      final midiBytes = MidiEngine.generateMidiFromAudio(audioBytes);
+      final midiBytes = MidiEngine.generateMidiFromAudio(
+        audioBytes,
+        beatsPerMeasure: _parsedTimeSigTop(),
+        beatUnit: _parsedTimeSigBottom(),
+      );
 
       // 4. Tworzymy unikalną nazwę, żeby uniknąć starych plików w pamięci
       final String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
@@ -715,6 +682,8 @@ class _MyHomePageState extends State<MyHomePage> {
     _playbackResetTimer?.cancel();
     _playerCompleteSubscription?.cancel();
     _playerStateSubscription?.cancel();
+    _timeSigTopController.dispose();
+    _timeSigBottomController.dispose();
     audioRecorder.dispose();
     audioPlayer.dispose();
     super.dispose();
@@ -797,6 +766,61 @@ class _MyHomePageState extends State<MyHomePage> {
                         ),
                       ],
                     ),
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Material(
+                color: const Color(0xFF1A1C22),
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: colorScheme.primary.withValues(alpha: 0.30),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 46,
+                        child: TextField(
+                          controller: _timeSigTopController,
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.center,
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            contentPadding: EdgeInsets.symmetric(vertical: 8),
+                          ),
+                        ),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 6),
+                        child: Text('/'),
+                      ),
+                      SizedBox(
+                        width: 46,
+                        child: TextField(
+                          controller: _timeSigBottomController,
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.center,
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            contentPadding: EdgeInsets.symmetric(vertical: 8),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Tempo: Auto Detect',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -952,3 +976,6 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 }
+
+
+

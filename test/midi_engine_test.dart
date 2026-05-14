@@ -87,7 +87,30 @@ void main() {
 
     expect(events.map((event) => event.note), [60, 64, 67, 72, 67, 64]);
     expect(events.map((event) => event.tick), [0, 480, 960, 1440, 1920, 2400]);
-    expect(noteDurations, everyElement(480));
+    expect(noteDurations.every((ticks) => ticks <= 480), isTrue);
+  });
+
+  test('preserves staccato spacing for steady eighth-note phrases', () {
+    final wavBytes = _steadyStaccatoEighthPhraseWav();
+
+    final midiBytes = MidiEngine.generateMidiFromAudio(wavBytes, tempoBpm: 120);
+    final events = _noteOnEvents(midiBytes);
+    final noteDurations = _noteDurations(midiBytes);
+
+    expect(events.length, greaterThanOrEqualTo(7));
+    expect(events.take(7).map((event) => event.note), [60, 62, 64, 65, 67, 69, 71]);
+    expect(events.take(7).map((event) => event.tick), [0, 240, 480, 720, 960, 1200, 1440]);
+    expect(noteDurations.isNotEmpty, isTrue);
+  });
+
+  test('keeps mixed-rhythm phrase without cutting the second half', () {
+    final wavBytes = _mixedRhythmPhraseWav();
+
+    final midiBytes = MidiEngine.generateMidiFromAudio(wavBytes, tempoBpm: 150);
+    final events = _noteOnEvents(midiBytes);
+
+    expect(events.length, greaterThanOrEqualTo(10));
+    expect(events.last.tick, greaterThan(2400));
   });
 
   test(
@@ -266,6 +289,105 @@ Uint8List _steadySungPhraseWav() {
     }
   }
 
+  return Wav([samples], sampleRate).write();
+}
+
+Uint8List _steadyStaccatoEighthPhraseWav() {
+  const sampleRate = 44100;
+  const notes = [60, 62, 64, 65, 67, 69, 71, 72];
+  final noteLengths = List<double>.filled(notes.length, 0.11);
+  final gapLengths = List<double>.filled(notes.length - 1, 0.14);
+  final totalSamples =
+      noteLengths.fold<int>(
+        0,
+        (sum, seconds) => sum + (sampleRate * seconds).round(),
+      ) +
+      gapLengths.fold<int>(
+        0,
+        (sum, seconds) => sum + (sampleRate * seconds).round(),
+      );
+  final samples = Float64List(totalSamples);
+
+  var offset = 0;
+  for (var i = 0; i < notes.length; i++) {
+    final noteSamples = (sampleRate * noteLengths[i]).round();
+    final frequency = _midiFrequency(notes[i]);
+    var phase = 0.0;
+    var phase2 = 0.0;
+    for (var j = 0; j < noteSamples; j++) {
+      final env = _testEnvelope(j, noteSamples);
+      phase += 2 * math.pi * frequency / sampleRate;
+      phase2 += 2 * math.pi * frequency * 2 / sampleRate;
+      samples[offset + j] = (math.sin(phase) * 0.65 + math.sin(phase2) * 0.24) * env * 0.85;
+    }
+    offset += noteSamples;
+    if (i < gapLengths.length) {
+      offset += (sampleRate * gapLengths[i]).round();
+    }
+  }
+
+  return Wav([samples], sampleRate).write();
+}
+
+Uint8List _mixedRhythmPhraseWav() {
+  const sampleRate = 44100;
+  const notes = [60, 64, 67, 65, 64, 62, 60, 62, 64, 65, 67, 69, 71, 72];
+  final noteLengths = [
+    0.24,
+    0.15,
+    0.20,
+    0.20,
+    0.20,
+    0.20,
+    0.18,
+    0.18,
+    0.14,
+    0.14,
+    0.14,
+    0.14,
+    0.24,
+    0.16,
+  ];
+  final gaps = [
+    0.06,
+    0.04,
+    0.06,
+    0.05,
+    0.05,
+    0.05,
+    0.05,
+    0.05,
+    0.04,
+    0.04,
+    0.04,
+    0.04,
+    0.06,
+  ];
+  final totalSamples =
+      noteLengths.fold<int>(
+        0,
+        (sum, seconds) => sum + (sampleRate * seconds).round(),
+      ) +
+      gaps.fold<int>(0, (sum, seconds) => sum + (sampleRate * seconds).round());
+  final samples = Float64List(totalSamples);
+
+  var offset = 0;
+  for (var i = 0; i < notes.length; i++) {
+    final noteSamples = (sampleRate * noteLengths[i]).round();
+    final frequency = _midiFrequency(notes[i]);
+    var phase = 0.0;
+    var phase2 = 0.0;
+    for (var j = 0; j < noteSamples; j++) {
+      final env = _testEnvelope(j, noteSamples);
+      phase += 2 * math.pi * frequency / sampleRate;
+      phase2 += 2 * math.pi * frequency * 2 / sampleRate;
+      samples[offset + j] = (math.sin(phase) * 0.62 + math.sin(phase2) * 0.22) * env * 0.82;
+    }
+    offset += noteSamples;
+    if (i < gaps.length) {
+      offset += (sampleRate * gaps[i]).round();
+    }
+  }
   return Wav([samples], sampleRate).write();
 }
 

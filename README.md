@@ -52,3 +52,9 @@ flutter test test/midi_engine_test.dart
 ## Notes
 
 The converter currently expects WAV/PCM input. Older recordings stored as compressed formats need to be recorded again with the current WAV recording flow before conversion.
+
+## TorchCrepe Route
+
+A clean TorchCrepe integration route (local bridge service) is documented here:
+
+- [readme/torchcrepe_bridge.md](readme/torchcrepe_bridge.md)

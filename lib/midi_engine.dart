@@ -6,18 +6,18 @@ import 'package:wav/wav.dart';
 class MidiEngine {
   static const int _ticksPerQuarter = 480;
   static const int _defaultTempoBpm = 120;
-  static const double _minPitchHz = 75;
+  static const double _minPitchHz = 60;
   static const double _maxPitchHz = 1100;
   static const double _yinThreshold = 0.12;
-  static const double _minNoteSeconds = 0.20;
-  static const double _minNoteSwitchSeconds = 0.18;
+  static const double _minNoteSeconds = 0.12;
+  static const double _minNoteSwitchSeconds = 0.10;
   static const double _maxGapSeconds = 0.14;
   static const int _smoothingRadius = 5;
   static const double _minSmoothingVoteRatio = 0.56;
   static const double _maxFragmentSeconds = 0.30;
-  static const double _fragmentMedianRatio = 0.58;
-  static const int _beatsPerMeasure = 4;
-  static const int _ticksPerBar = _ticksPerQuarter * _beatsPerMeasure;
+  static const double _fragmentMedianRatio = 0.44;
+  static const int _defaultBeatsPerMeasure = 4;
+  static const int _defaultBeatUnit = 4;
   static const int _quantizeTicks = _ticksPerQuarter ~/ 4;
   static const double _maxSteadyRhythmDeviation = 0.42;
   static const List<int> _steadyRhythmNoteTicks = [
@@ -93,6 +93,8 @@ class MidiEngine {
   static Uint8List generateMidiFromAudio(
     Uint8List audioBytes, {
     int? tempoBpm,
+    int beatsPerMeasure = _defaultBeatsPerMeasure,
+    int beatUnit = _defaultBeatUnit,
   }) {
     final audio = _decodeWav(audioBytes);
     final samples = _prepareSignal(audio.samples);
@@ -107,9 +109,20 @@ class MidiEngine {
     final detectedTempoBpm = _normalizeTempoBpm(
       tempoBpm ?? _estimateTempoBpm(notes),
     );
-    final quantizedNotes = _quantizeNotes(notes, tempoBpm: detectedTempoBpm);
+    final normalizedBeatsPerMeasure = beatsPerMeasure.clamp(1, 12).toInt();
+    final normalizedBeatUnit = _normalizeBeatUnit(beatUnit);
+    final quantizedNotes = _quantizeNotes(
+      notes,
+      tempoBpm: detectedTempoBpm,
+      beatsPerMeasure: normalizedBeatsPerMeasure,
+    );
 
-    return _buildMidi(quantizedNotes, tempoBpm: detectedTempoBpm);
+    return _buildMidi(
+      quantizedNotes,
+      tempoBpm: detectedTempoBpm,
+      beatsPerMeasure: normalizedBeatsPerMeasure,
+      beatUnit: normalizedBeatUnit,
+    );
   }
 
   static _AudioData _decodeWav(Uint8List audioBytes) {
@@ -148,7 +161,44 @@ class MidiEngine {
       }
     }
 
-    return output;
+    return _trimLeadingSilence(output);
+  }
+
+  static Float64List _trimLeadingSilence(Float64List samples) {
+    if (samples.length < 2048) return samples;
+
+    const frameSize = 1024;
+    const hopSize = 256;
+    final frameCount = 1 + ((samples.length - frameSize) ~/ hopSize);
+    if (frameCount <= 0) return samples;
+
+    final rmsValues = List<double>.filled(frameCount, 0);
+    for (var frame = 0; frame < frameCount; frame++) {
+      rmsValues[frame] = _rms(samples, frame * hopSize, frameSize);
+    }
+
+    final strongestRms = _percentile(rmsValues, 0.85);
+    final onsetGate = math.max(0.010, strongestRms * 0.16);
+    final sustainFrames = 3;
+    var startFrame = 0;
+
+    for (var i = 0; i <= frameCount - sustainFrames; i++) {
+      var voiced = true;
+      for (var j = 0; j < sustainFrames; j++) {
+        if (rmsValues[i + j] < onsetGate) {
+          voiced = false;
+          break;
+        }
+      }
+      if (voiced) {
+        startFrame = i;
+        break;
+      }
+    }
+
+    if (startFrame == 0) return samples;
+    final startSample = (startFrame * hopSize).clamp(0, samples.length - 1);
+    return Float64List.fromList(samples.sublist(startSample));
   }
 
   static List<_DetectedNote> _detectNotes(Float64List samples, int sampleRate) {
@@ -167,8 +217,8 @@ class MidiEngine {
       rmsValues[frame] = _rms(samples, frame * hopSize, frameSize);
     }
 
-    final strongestRms = _percentile(rmsValues, 0.90);
-    final silenceGate = math.max(0.020, strongestRms * 0.25);
+    final strongestRms = _percentile(rmsValues, 0.85);
+    final silenceGate = math.max(0.012, strongestRms * 0.18);
     final rawFrames = List<_PitchFrame?>.filled(frameCount, null);
 
     for (var frame = 0; frame < frameCount; frame++) {
@@ -177,7 +227,7 @@ class MidiEngine {
 
       final start = frame * hopSize;
       final pitch = _estimatePitchYin(samples, start, frameSize, sampleRate);
-      if (pitch == null || pitch.confidence < 0.78) continue;
+      if (pitch == null || pitch.confidence < 0.68) continue;
 
       final note = _frequencyToMidi(pitch.frequency);
       if (note < 24 || note > 108) continue;
@@ -424,12 +474,13 @@ class MidiEngine {
         next != null && next.durationSeconds >= note.durationSeconds * 1.35;
     if (!previousIsStable && !nextIsStable) return false;
 
-    final betweenStableNotes =
+    final bridgeFragment =
         previous != null &&
         next != null &&
+        previous.note == next.note &&
         previous.durationSeconds > note.durationSeconds &&
         next.durationSeconds > note.durationSeconds;
-    if (betweenStableNotes) return true;
+    if (bridgeFragment) return true;
 
     final previousSemitoneWobble =
         previous != null && (previous.note - note.note).abs() == 1;
@@ -586,18 +637,7 @@ class MidiEngine {
     var bestScore = double.infinity;
 
     for (var tempo = 50; tempo <= 200; tempo++) {
-      final beatSeconds = 60 / tempo;
-      var score = 0.0;
-
-      for (final interval in intervals) {
-        final beats = interval / beatSeconds;
-        final closest = _closestBeatInterval(beats);
-        final timingError = (beats - closest).abs() / math.max(closest, 0.25);
-        score += timingError + _beatIntervalPenalty(closest);
-      }
-
-      score /= intervals.length;
-      score += (tempo - _defaultTempoBpm).abs() * 0.0008;
+      final score = _tempoScore(tempo, intervals);
 
       if (score < bestScore) {
         bestScore = score;
@@ -605,7 +645,45 @@ class MidiEngine {
       }
     }
 
-    return _snapToCommonTempo(bestTempo);
+    final correctedTempo = _resolveTempoOctave(bestTempo, intervals);
+    return _snapToCommonTempo(correctedTempo);
+  }
+
+  static int _resolveTempoOctave(int bestTempo, List<double> intervals) {
+    final candidateTempos = <int>{
+      bestTempo,
+      (bestTempo * 2).clamp(50, 200).toInt(),
+      (bestTempo / 2).round().clamp(50, 200).toInt(),
+    };
+    var chosenTempo = bestTempo;
+    var chosenScore = _tempoScore(bestTempo, intervals);
+    for (final tempo in candidateTempos) {
+      final score = _tempoScore(tempo, intervals);
+      // Prefer faster equivalent when timing score is close.
+      final prefersFasterEquivalent =
+          tempo > chosenTempo && score <= chosenScore + 0.02;
+      if (score < chosenScore || prefersFasterEquivalent) {
+        chosenTempo = tempo;
+        chosenScore = score;
+      }
+    }
+    return chosenTempo;
+  }
+
+  static double _tempoScore(int tempo, List<double> intervals) {
+    final beatSeconds = 60 / tempo;
+    var score = 0.0;
+
+    for (final interval in intervals) {
+      final beats = interval / beatSeconds;
+      final closest = _closestBeatInterval(beats);
+      final timingError = (beats - closest).abs() / math.max(closest, 0.25);
+      score += timingError + _beatIntervalPenalty(closest);
+    }
+
+    score /= intervals.length;
+    score += (tempo - _defaultTempoBpm).abs() * 0.0008;
+    return score;
   }
 
   static double _closestBeatInterval(double beats) {
@@ -650,16 +728,48 @@ class MidiEngine {
     return tempoBpm.clamp(40, 240).toInt();
   }
 
+  static int _normalizeBeatUnit(int beatUnit) {
+    const validUnits = [1, 2, 4, 8, 16, 32];
+    if (validUnits.contains(beatUnit)) return beatUnit;
+    return _defaultBeatUnit;
+  }
+
+  static int _beatUnitDenominatorPower(int beatUnit) {
+    var value = beatUnit;
+    var exponent = 0;
+    while (value > 1) {
+      value ~/= 2;
+      exponent++;
+    }
+    return exponent.clamp(0, 8);
+  }
+
   static List<_QuantizedNote> _quantizeNotes(
     List<_DetectedNote> notes, {
     required int tempoBpm,
+    required int beatsPerMeasure,
   }) {
-    final steadyPhrase = _quantizeSteadyRhythmPhrase(notes, tempoBpm: tempoBpm);
+    final steadyPhrase = _quantizeSteadyRhythmPhrase(
+      notes,
+      tempoBpm: tempoBpm,
+      beatsPerMeasure: beatsPerMeasure,
+    );
     if (steadyPhrase != null) return steadyPhrase;
 
     final beatSeconds = 60 / tempoBpm;
     final quantized = <_QuantizedNote>[];
+    final intervalTicksRaw = <int>[];
+    final snappedIntervalTicks = <int>[];
     var currentStartTick = 0;
+
+    for (var i = 0; i < notes.length - 1; i++) {
+      final intervalSeconds = notes[i + 1].startSeconds - notes[i].startSeconds;
+      final intervalBeats = intervalSeconds / beatSeconds;
+      final intervalTicks =
+          (_closestBeatInterval(intervalBeats) * _ticksPerQuarter).round();
+      intervalTicksRaw.add(_roundToGrid(intervalTicks, _quantizeTicks));
+    }
+    snappedIntervalTicks.addAll(_stabilizeSubdivisionIntervals(intervalTicksRaw));
 
     for (var i = 0; i < notes.length; i++) {
       final note = notes[i];
@@ -679,11 +789,7 @@ class MidiEngine {
       );
 
       if (i < notes.length - 1) {
-        final intervalSeconds = notes[i + 1].startSeconds - note.startSeconds;
-        final intervalBeats = intervalSeconds / beatSeconds;
-        final intervalTicks =
-            (_closestBeatInterval(intervalBeats) * _ticksPerQuarter).round();
-        currentStartTick += _roundToGrid(intervalTicks, _quantizeTicks);
+        currentStartTick += snappedIntervalTicks[i];
       }
     }
 
@@ -705,9 +811,35 @@ class MidiEngine {
     return quantized;
   }
 
+  static List<int> _stabilizeSubdivisionIntervals(List<int> intervalTicks) {
+    if (intervalTicks.length < 4) return intervalTicks;
+
+    final counts = <int, int>{};
+    for (final ticks in intervalTicks) {
+      counts[ticks] = (counts[ticks] ?? 0) + 1;
+    }
+    final dominant = counts.entries.reduce((a, b) => a.value >= b.value ? a : b);
+    final dominantTicks = dominant.key;
+    final dominantRatio = dominant.value / intervalTicks.length;
+
+    // Only lock when one subdivision clearly dominates and it's musical short-note space.
+    if (dominantRatio < 0.55 || dominantTicks > _ticksPerQuarter) {
+      return intervalTicks;
+    }
+
+    final stabilized = <int>[];
+    for (final ticks in intervalTicks) {
+      final distance = (ticks - dominantTicks).abs();
+      final closeToDominant = distance <= (dominantTicks * 0.55).round();
+      stabilized.add(closeToDominant ? dominantTicks : ticks);
+    }
+    return stabilized;
+  }
+
   static List<_QuantizedNote>? _quantizeSteadyRhythmPhrase(
     List<_DetectedNote> notes, {
     required int tempoBpm,
+    required int beatsPerMeasure,
   }) {
     if (notes.length < 3 || notes.length > 32) return null;
 
@@ -737,6 +869,7 @@ class MidiEngine {
       intervalMedian,
       tempoBpm: tempoBpm,
       noteCount: notes.length,
+      beatsPerMeasure: beatsPerMeasure,
     );
     if (noteTicks == null) return null;
 
@@ -745,16 +878,46 @@ class MidiEngine {
         _QuantizedNote(
           note: notes[i].note,
           startTick: i * noteTicks,
-          durationTicks: noteTicks,
+          durationTicks: _steadyPhraseDurationTicks(
+            notes,
+            index: i,
+            noteTicks: noteTicks,
+          ),
           velocity: notes[i].velocity,
         ),
     ];
+  }
+
+  static int _steadyPhraseDurationTicks(
+    List<_DetectedNote> notes, {
+    required int index,
+    required int noteTicks,
+  }) {
+    final note = notes[index];
+    final intervalSeconds = index < notes.length - 1
+        ? notes[index + 1].startSeconds - note.startSeconds
+        : _medianDurationSeconds(notes);
+    if (intervalSeconds <= 0) {
+      return noteTicks;
+    }
+
+    final articulation = (note.durationSeconds / intervalSeconds).clamp(0.22, 1.25);
+    // Preserve near-legato as full value, but keep explicit staccato space.
+    final mapped = articulation >= 0.78 ? 1.0 : articulation;
+    const durationGrid = _ticksPerQuarter ~/ 8;
+    var duration = _roundToGrid((noteTicks * mapped).round(), durationGrid);
+    duration = duration.clamp(durationGrid, noteTicks);
+    if (mapped < 0.92) {
+      duration = math.min(duration, noteTicks - durationGrid);
+    }
+    return duration;
   }
 
   static int? _bestSteadyRhythmTicks(
     double intervalMedian, {
     required int tempoBpm,
     required int noteCount,
+    required int beatsPerMeasure,
   }) {
     final beatSeconds = 60 / tempoBpm;
     if (beatSeconds <= 0) return null;
@@ -763,6 +926,7 @@ class MidiEngine {
     int? bestTicks;
     var bestScore = double.infinity;
 
+    final ticksPerBar = _ticksPerQuarter * beatsPerMeasure;
     for (final ticks in _steadyRhythmNoteTicks) {
       final candidateBeats = ticks / _ticksPerQuarter;
       final timingError =
@@ -770,12 +934,12 @@ class MidiEngine {
       if (timingError > 0.48) continue;
 
       final phraseTicks = noteCount * ticks;
-      final barRemainder = phraseTicks % _ticksPerBar;
+      final barRemainder = phraseTicks % ticksPerBar;
       final barDistance = math.min(
         barRemainder,
-        barRemainder == 0 ? 0 : _ticksPerBar - barRemainder,
+        barRemainder == 0 ? 0 : ticksPerBar - barRemainder,
       );
-      final barPenalty = barDistance / _ticksPerBar * 0.16;
+      final barPenalty = barDistance / ticksPerBar * 0.16;
       final dottedPenalty =
           ticks == (_ticksPerQuarter * 3) ~/ 4 ||
               ticks == (_ticksPerQuarter * 3) ~/ 2
@@ -814,6 +978,8 @@ class MidiEngine {
   static Uint8List _buildMidi(
     List<_QuantizedNote> notes, {
     required int tempoBpm,
+    required int beatsPerMeasure,
+    required int beatUnit,
   }) {
     final events = <_MidiEvent>[];
 
@@ -833,6 +999,7 @@ class MidiEngine {
 
     final track = <int>[];
     final microsecondsPerQuarter = 60000000 ~/ tempoBpm;
+    final denominatorPower = _beatUnitDenominatorPower(beatUnit);
     track.addAll([
       0x00,
       0xFF,
@@ -845,8 +1012,8 @@ class MidiEngine {
       0xFF,
       0x58,
       0x04,
-      _beatsPerMeasure,
-      0x02,
+      beatsPerMeasure,
+      denominatorPower,
       0x18,
       0x08,
       0x00,
