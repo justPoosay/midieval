@@ -58,3 +58,9 @@ The converter currently expects WAV/PCM input. Older recordings stored as compre
 A clean TorchCrepe integration route (local bridge service) is documented here:
 
 - [readme/torchcrepe_bridge.md](readme/torchcrepe_bridge.md)
+
+## Basic Pitch Route
+
+Audio-to-MIDI conversion currently uses a Basic Pitch bridge service:
+
+- [readme/basic_pitch.md](readme/basic_pitch.md)

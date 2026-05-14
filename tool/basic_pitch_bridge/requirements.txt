@@ -1,0 +1,6 @@
+fastapi==0.115.12
+uvicorn==0.30.6
+basic-pitch==0.4.0
+python-multipart==0.0.20
+numpy==1.26.4
+soundfile==0.12.1

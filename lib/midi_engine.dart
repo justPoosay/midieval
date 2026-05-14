@@ -6,14 +6,15 @@ import 'package:wav/wav.dart';
 class MidiEngine {
   static const int _ticksPerQuarter = 480;
   static const int _defaultTempoBpm = 120;
-  static const double _minPitchHz = 60;
+  static const double _minPitchHz = 45;
   static const double _maxPitchHz = 1100;
   static const double _yinThreshold = 0.12;
-  static const double _minNoteSeconds = 0.12;
-  static const double _minNoteSwitchSeconds = 0.10;
+  static const double _minNoteSeconds = 0.09;
+  static const double _minNoteSwitchSeconds = 0.07;
   static const double _maxGapSeconds = 0.14;
-  static const int _smoothingRadius = 5;
-  static const double _minSmoothingVoteRatio = 0.56;
+  static const int _frameHopDivisor = 8;
+  static const int _smoothingRadius = 3;
+  static const double _minSmoothingVoteRatio = 0.52;
   static const double _maxFragmentSeconds = 0.30;
   static const double _fragmentMedianRatio = 0.44;
   static const int _defaultBeatsPerMeasure = 4;
@@ -205,10 +206,10 @@ class MidiEngine {
     if (samples.length < 1024) return const [];
 
     final frameSize = math.min(
-      4096,
-      math.max(2048, _nextPowerOfTwo(sampleRate ~/ 12)),
+      6144,
+      math.max(3072, _nextPowerOfTwo(sampleRate ~/ 11)),
     );
-    final hopSize = frameSize ~/ 4;
+    final hopSize = math.max(192, frameSize ~/ _frameHopDivisor);
     final frameCount = 1 + ((samples.length - frameSize) ~/ hopSize);
     if (frameCount <= 0) return const [];
 
@@ -221,6 +222,7 @@ class MidiEngine {
     final silenceGate = math.max(0.012, strongestRms * 0.18);
     final rawFrames = List<_PitchFrame?>.filled(frameCount, null);
 
+    int? previousAcceptedNote;
     for (var frame = 0; frame < frameCount; frame++) {
       final rms = rmsValues[frame];
       if (rms < silenceGate) continue;
@@ -231,8 +233,13 @@ class MidiEngine {
 
       final note = _frequencyToMidi(pitch.frequency);
       if (note < 24 || note > 108) continue;
-
-      rawFrames[frame] = _PitchFrame(note, pitch.confidence, rms);
+      final stabilized = _stabilizeFrameNote(
+        note,
+        previousAcceptedNote,
+        confidence: pitch.confidence,
+      );
+      previousAcceptedNote = stabilized;
+      rawFrames[frame] = _PitchFrame(stabilized, pitch.confidence, rms);
     }
 
     final smoothedFrames = _smoothFrames(rawFrames);
@@ -649,6 +656,22 @@ class MidiEngine {
     return _snapToCommonTempo(correctedTempo);
   }
 
+  static int _stabilizeFrameNote(
+    int note,
+    int? previous, {
+    required double confidence,
+  }) {
+    if (previous == null) return note;
+    final diff = note - previous;
+    if (diff.abs() == 1 && confidence < 0.74) {
+      return previous;
+    }
+    if (diff.abs() == 12 && confidence < 0.80) {
+      return previous;
+    }
+    return note;
+  }
+
   static int _resolveTempoOctave(int bestTempo, List<double> intervals) {
     final candidateTempos = <int>{
       bestTempo,
@@ -823,14 +846,14 @@ class MidiEngine {
     final dominantRatio = dominant.value / intervalTicks.length;
 
     // Only lock when one subdivision clearly dominates and it's musical short-note space.
-    if (dominantRatio < 0.55 || dominantTicks > _ticksPerQuarter) {
+    if (dominantRatio < 0.70 || dominantTicks > _ticksPerQuarter) {
       return intervalTicks;
     }
 
     final stabilized = <int>[];
     for (final ticks in intervalTicks) {
       final distance = (ticks - dominantTicks).abs();
-      final closeToDominant = distance <= (dominantTicks * 0.55).round();
+      final closeToDominant = distance <= (dominantTicks * 0.30).round();
       stabilized.add(closeToDominant ? dominantTicks : ticks);
     }
     return stabilized;

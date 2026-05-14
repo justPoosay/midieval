@@ -9,7 +9,6 @@ import 'package:audioplayers/audioplayers.dart';
 
 import 'package:http/http.dart' as http;
 
-import 'midi_engine.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -202,6 +201,8 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   static const int _recordingSampleRate = 44100;
+  static const String _basicPitchBridgeUrl =
+      'http://127.0.0.1:8090/audio-to-midi';
 
   final AudioRecorder audioRecorder = AudioRecorder();
   final AudioPlayer audioPlayer = AudioPlayer();
@@ -572,6 +573,35 @@ class _MyHomePageState extends State<MyHomePage> {
     return response.bodyBytes;
   }
 
+  Future<Uint8List> _convertWithBasicPitch(Uint8List audioBytes) async {
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse(_basicPitchBridgeUrl),
+    )
+      ..fields['audio_filename'] = 'input.wav'
+      ..fields['purify_audio'] = 'true'
+      ..files.add(
+        http.MultipartFile.fromBytes(
+          'audio_file',
+          audioBytes,
+          filename: 'input.wav',
+        ),
+      );
+
+    final response = await request.send();
+    final responseBytes = await response.stream.toBytes();
+    if (response.statusCode != 200) {
+      final errorText = String.fromCharCodes(responseBytes);
+      throw Exception(
+        'Basic Pitch bridge error (${response.statusCode}): $errorText',
+      );
+    }
+    if (responseBytes.isEmpty) {
+      throw Exception('Basic Pitch bridge returned empty MIDI bytes');
+    }
+    return Uint8List.fromList(responseBytes);
+  }
+
   void _showSuccessDialog() {
     showDialog(
       context: context,
@@ -588,20 +618,6 @@ class _MyHomePageState extends State<MyHomePage> {
         ],
       ),
     );
-  }
-
-  int _parsedTimeSigTop() {
-    final parsed = int.tryParse(_timeSigTopController.text.trim());
-    if (parsed == null) return 4;
-    return parsed.clamp(1, 12).toInt();
-  }
-
-  int _parsedTimeSigBottom() {
-    final parsed = int.tryParse(_timeSigBottomController.text.trim());
-    if (parsed == null) return 4;
-    const valid = [1, 2, 4, 8, 16, 32];
-    if (!valid.contains(parsed)) return 4;
-    return parsed;
   }
 
   Future<void> convertAudioToMidi(String audioUrl, int sketchId) async {
@@ -624,11 +640,7 @@ class _MyHomePageState extends State<MyHomePage> {
       }
 
       // 3. Wywołujemy silnik z osobnego pliku (ten, który ma tylko 1 nutę)
-      final midiBytes = MidiEngine.generateMidiFromAudio(
-        audioBytes,
-        beatsPerMeasure: _parsedTimeSigTop(),
-        beatUnit: _parsedTimeSigBottom(),
-      );
+      final midiBytes = await _convertWithBasicPitch(audioBytes);
 
       // 4. Tworzymy unikalną nazwę, żeby uniknąć starych plików w pamięci
       final String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
