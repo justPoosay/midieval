@@ -4,6 +4,18 @@ MIDieval is a Flutter prototype for capturing short hummed melodies and turning 
 
 The core experiment is the audio-to-MIDI engine in `lib/midi_engine.dart`. It decodes mono WAV audio, estimates pitch, smooths unstable humming artifacts, groups the detected melody into notes, and quantizes simple phrases onto a musical grid.
 
+## Problem This Project Tackles
+
+Human voice is not a single pure tone. Even when we hear one clear sung note, the waveform contains many additional harmonic components (overtones), some of which are subtle and not consciously perceived. For audio-to-MIDI conversion, this is a major challenge: a computer can accidentally lock onto one of those harmonics instead of the true fundamental pitch.
+
+That mismatch causes common errors such as:
+
+- wrong detected note (for example octave or semitone mistakes),
+- unstable note switching ("wobbling" notes),
+- broken rhythm segmentation because pitch tracking is inconsistent.
+
+MIDieval focuses on reducing that problem by stabilizing pitch detection, filtering unstable fragments, and snapping the result into usable musical notes for MIDI output.
+
 ## Features
 
 - Email authentication through Supabase.

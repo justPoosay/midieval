@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
@@ -9,7 +8,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
-import 'package:wav/wav.dart';
 
 import 'package:http/http.dart' as http;
 
@@ -279,16 +277,22 @@ class _MyHomePageState extends State<MyHomePage> {
   }) async {
     await audioPlayer.setPlayerMode(mode);
     await audioPlayer.setReleaseMode(ReleaseMode.stop);
-    await audioPlayer.setAudioContext(
-      const AudioContext(
-        android: AudioContextAndroid(
-          contentType: AndroidContentType.music,
-          usageType: AndroidUsageType.media,
-          audioFocus: AndroidAudioFocus.gain,
-          stayAwake: true,
+    try {
+      await audioPlayer.setAudioContext(
+        const AudioContext(
+          android: AudioContextAndroid(
+            contentType: AndroidContentType.music,
+            usageType: AndroidUsageType.media,
+            audioFocus: AndroidAudioFocus.gain,
+            stayAwake: true,
+          ),
         ),
-      ),
-    );
+      );
+    } on MissingPluginException {
+      // Can happen on desktop during hot restart; playback still works without this.
+    } catch (_) {
+      // Best-effort only; ignore platform-specific context failures.
+    }
   }
 
   Future<List<Map<String, dynamic>>> getSketches() async {
@@ -1333,8 +1337,6 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
   bool _isPreviewPlaying = false;
   double _playheadTick = 0;
   Timer? _previewTimer;
-  final AudioPlayer _previewPlayer = AudioPlayer();
-  String? _previewWavPath;
   int? _erasePointer;
   final Set<int> _erasedIndices = <int>{};
 
@@ -1364,7 +1366,6 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
   @override
   void dispose() {
     _previewTimer?.cancel();
-    _previewPlayer.dispose();
     super.dispose();
   }
 
@@ -1672,7 +1673,6 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
   Future<void> _togglePreviewPlayback(int tickEnd) async {
     if (_isPreviewPlaying) {
       _previewTimer?.cancel();
-      await _previewPlayer.stop();
       if (mounted) {
         setState(() => _isPreviewPlaying = false);
       }
@@ -1684,19 +1684,19 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     final maxTick = math.max(1, tickEnd);
     if (_playheadTick >= maxTick) _playheadTick = 0;
     _previewTimer?.cancel();
-    final wavPath = await _buildPreviewWav(tickEnd);
-    await _previewPlayer.stop();
-    await _previewPlayer.setSourceDeviceFile(wavPath);
-    await _previewPlayer.resume();
     if (!mounted) return;
-    setState(() => _isPreviewPlaying = true);
+    setState(() {
+      _isPreviewPlaying = true;
+    });
     _previewTimer = Timer.periodic(const Duration(milliseconds: 16), (timer) {
       if (!mounted) {
         timer.cancel();
         return;
       }
       setState(() {
+        final previousTick = _playheadTick;
         _playheadTick += ticksPerSecond * 0.016;
+        _triggerNotesBetween(previousTick, _playheadTick);
         if (_playheadTick >= maxTick) {
           _playheadTick = maxTick.toDouble();
           _isPreviewPlaying = false;
@@ -1708,7 +1708,6 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
 
   Future<void> _rewindPreview() async {
     _previewTimer?.cancel();
-    await _previewPlayer.stop();
     if (!mounted) return;
     setState(() {
       _isPreviewPlaying = false;
@@ -1716,51 +1715,46 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     });
   }
 
-  Future<String> _buildPreviewWav(int tickEnd) async {
-    final sampleRate = 44100;
-    final durationSeconds =
-        ((tickEnd / widget.parsed.ticksPerQuarter) * (60.0 / widget.tempoOverrideBpm))
-            .clamp(0.4, 120.0);
-    final sampleCount = math.max(1, (durationSeconds * sampleRate).round());
-    final samples = Float64List(sampleCount);
-
-    final attackSamples = (0.005 * sampleRate).round();
-    final releaseSamples = (0.020 * sampleRate).round();
+  void _triggerNotesBetween(double fromTick, double toTick) {
     for (final note in _notes) {
-      final startSec =
-          (note.startTick / widget.parsed.ticksPerQuarter) * (60.0 / widget.tempoOverrideBpm);
-      final endSec = ((note.startTick + note.durationTicks) / widget.parsed.ticksPerQuarter) *
-          (60.0 / widget.tempoOverrideBpm);
-      final start = (startSec * sampleRate).round().clamp(0, sampleCount - 1);
-      final end = (endSec * sampleRate).round().clamp(start + 1, sampleCount);
-      final freq = 440.0 * math.pow(2.0, (note.note - 69) / 12.0);
-      final velocity = (note.velocity.clamp(1, 127) / 127.0) * 0.20;
-      for (var i = start; i < end; i++) {
-        final local = i - start;
-        final remain = end - i;
-        var env = 1.0;
-        if (local < attackSamples) env = local / math.max(1, attackSamples);
-        if (remain < releaseSamples) env = math.min(env, remain / math.max(1, releaseSamples));
-        samples[i] += math.sin(2 * math.pi * freq * (local / sampleRate)) * velocity * env;
+      final start = note.startTick.toDouble();
+      if (start > fromTick && start <= toTick) {
+        unawaited(_playLiveNote(note));
       }
     }
+  }
 
-    var peak = 0.0;
-    for (final s in samples) {
-      peak = math.max(peak, s.abs());
-    }
-    if (peak > 0.98) {
-      final gain = 0.98 / peak;
-      for (var i = 0; i < samples.length; i++) {
-        samples[i] *= gain;
-      }
-    }
+  Future<void> _playLiveNote(EditableMidiNote note) async {
+    // Disabled for now: experimental live preview synthesis on Windows.
+    // Keeping implementation for future iteration.
+    return;
+  }
 
-    final dir = await getTemporaryDirectory();
-    _previewWavPath ??= '${dir.path}/midieval_preview.wav';
-    final wavBytes = Wav([samples], sampleRate).write();
-    await File(_previewWavPath!).writeAsBytes(wavBytes, flush: true);
-    return _previewWavPath!;
+  // ignore: unused_element
+  Future<void> _playLiveNoteExperimentalWindowsTone(EditableMidiNote note) async {
+    // Windows fallback preview synth without plugin channels:
+    // trigger a simple tone per note in a detached process.
+    if (!Platform.isWindows) return;
+    final freq = (440.0 * math.pow(2.0, (note.note - 69) / 12.0))
+        .round()
+        .clamp(37, 32767);
+    final durationMs = (((note.durationTicks / widget.parsed.ticksPerQuarter) *
+                (60.0 / widget.tempoOverrideBpm)) *
+            1000)
+        .round()
+        .clamp(30, 900);
+    try {
+      await Process.start('powershell', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-WindowStyle',
+        'Hidden',
+        '-Command',
+        '[console]::beep($freq,$durationMs)',
+      ]);
+    } catch (_) {
+      // Keep transport alive if tone triggering fails.
+    }
   }
 
   void _eraseAtPosition(
