@@ -1,12 +1,15 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:wav/wav.dart';
 
 import 'package:http/http.dart' as http;
 
@@ -216,6 +219,7 @@ class _MyHomePageState extends State<MyHomePage> {
   late Future<List<Map<String, dynamic>>> _sketchesFuture;
   int _nextLocalSketchId = -1;
   int? _playingSketchId;
+  int? _loadingSketchId;
   bool isRecording = false;
   bool _isSavingRecording = false;
   DateTime? _recordingStartedAt;
@@ -227,6 +231,15 @@ class _MyHomePageState extends State<MyHomePage> {
   final TextEditingController _timeSigBottomController = TextEditingController(
     text: '4',
   );
+  final TextEditingController _tempoController = TextEditingController(
+    text: '120',
+  );
+  bool _lockTempo = false;
+  bool _lockMeter = false;
+  bool _constrainToScale = false;
+  String _selectedKey = 'C';
+  String _selectedScale = 'Major';
+  bool _isGeneratingMidiPreview = false;
 
   @override
   void initState() {
@@ -249,11 +262,15 @@ class _MyHomePageState extends State<MyHomePage> {
 
     if (!mounted) {
       _playingSketchId = null;
+      _loadingSketchId = null;
       return;
     }
 
-    if (_playingSketchId != null) {
-      setState(() => _playingSketchId = null);
+    if (_playingSketchId != null || _loadingSketchId != null) {
+      setState(() {
+        _playingSketchId = null;
+        _loadingSketchId = null;
+      });
     }
   }
 
@@ -496,6 +513,12 @@ class _MyHomePageState extends State<MyHomePage> {
         return;
       }
 
+      if (mounted) {
+        setState(() {
+          _loadingSketchId = sketchId;
+          _playingSketchId = null;
+        });
+      }
       _playbackResetTimer?.cancel();
       final sourcePath = await _localPlaybackPathForUrl(audioUrl);
       final localFile = File(sourcePath);
@@ -512,7 +535,10 @@ class _MyHomePageState extends State<MyHomePage> {
       await audioPlayer.resume();
 
       if (mounted) {
-        setState(() => _playingSketchId = sketchId);
+        setState(() {
+          _playingSketchId = sketchId;
+          _loadingSketchId = null;
+        });
       }
       _schedulePlaybackReset(sketchId, playbackDuration);
     } catch (e) {
@@ -652,6 +678,9 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> convertAudioToMidi(String audioUrl, int sketchId) async {
     try {
+      if (mounted) {
+        setState(() => _isGeneratingMidiPreview = true);
+      }
       // 1. Informujemy użytkownika o starcie
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -671,7 +700,17 @@ class _MyHomePageState extends State<MyHomePage> {
 
       // 3. Wywołujemy silnik z osobnego pliku (ten, który ma tylko 1 nutę)
       final midiBytes = await _convertWithBasicPitch(audioBytes);
-      final editedMidiBytes = await _openMidiEditor(midiBytes);
+      final editedMidiBytes = await _openMidiEditor(
+        midiBytes,
+        tempoOverrideBpm: _lockTempo ? _parseTempoBpm() : null,
+        meterOverride: _lockMeter ? (_parseMeter()) : null,
+        keyScaleConstraint: _constrainToScale
+            ? KeyScaleConstraint(
+                tonic: _keyNameToPitchClass(_selectedKey),
+                isMinor: _selectedScale == 'Minor',
+              )
+            : null,
+      );
       if (editedMidiBytes == null) {
         return;
       }
@@ -720,10 +759,18 @@ class _MyHomePageState extends State<MyHomePage> {
           SnackBar(content: Text("Błąd: $e"), backgroundColor: Colors.red),
         );
       }
+    } finally {
+      if (mounted) {
+        setState(() => _isGeneratingMidiPreview = false);
+      }
     }
   }
-
-  Future<Uint8List?> _openMidiEditor(Uint8List midiBytes) async {
+  Future<Uint8List?> _openMidiEditor(
+    Uint8List midiBytes, {
+    int? tempoOverrideBpm,
+    ({int beatsPerMeasure, int beatUnit})? meterOverride,
+    KeyScaleConstraint? keyScaleConstraint,
+  }) async {
     final parsed = ParsedMidi.tryParse(midiBytes);
     if (parsed == null || parsed.notes.isEmpty) {
       if (mounted) {
@@ -737,10 +784,20 @@ class _MyHomePageState extends State<MyHomePage> {
       return midiBytes;
     }
     if (!mounted) return midiBytes;
+    final effectiveTempo = tempoOverrideBpm ?? parsed.tempoBpm;
+    final effectiveMeterTop =
+        meterOverride?.beatsPerMeasure ?? parsed.beatsPerMeasure;
+    final effectiveMeterBottom = meterOverride?.beatUnit ?? parsed.beatUnit;
     return showDialog<Uint8List>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => MidiEditorDialog(parsed: parsed),
+      builder: (context) => MidiEditorDialog(
+        parsed: parsed,
+        tempoOverrideBpm: effectiveTempo,
+        beatsPerMeasureOverride: effectiveMeterTop,
+        beatUnitOverride: effectiveMeterBottom,
+        keyScaleConstraint: keyScaleConstraint,
+      ),
     );
   }
 
@@ -752,6 +809,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _playerStateSubscription?.cancel();
     _timeSigTopController.dispose();
     _timeSigBottomController.dispose();
+    _tempoController.dispose();
     audioRecorder.dispose();
     audioPlayer.dispose();
     super.dispose();
@@ -781,8 +839,10 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
         ],
       ),
-      body: SafeArea(
-        child: Column(
+      body: Stack(
+        children: [
+          SafeArea(
+            child: Column(
           children: [
             // PANEL NAGRYWANIA
             Padding(
@@ -879,6 +939,7 @@ class _MyHomePageState extends State<MyHomePage> {
                         child: TextField(
                           controller: _timeSigTopController,
                           keyboardType: TextInputType.number,
+                          enabled: _lockMeter,
                           textAlign: TextAlign.center,
                           decoration: const InputDecoration(
                             isDense: true,
@@ -895,6 +956,7 @@ class _MyHomePageState extends State<MyHomePage> {
                         child: TextField(
                           controller: _timeSigBottomController,
                           keyboardType: TextInputType.number,
+                          enabled: _lockMeter,
                           textAlign: TextAlign.center,
                           decoration: const InputDecoration(
                             isDense: true,
@@ -904,9 +966,124 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                       const SizedBox(width: 12),
                       Expanded(
-                        child: Text(
-                          'Tempo: Auto Detect',
-                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        child: Row(
+                          children: [
+                            Switch(
+                              value: _lockTempo,
+                              onChanged: (value) {
+                                setState(() => _lockTempo = value);
+                              },
+                            ),
+                            const SizedBox(width: 4),
+                            const Text(
+                              'Tempo Lock',
+                              style: TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(width: 10),
+                            SizedBox(
+                              width: 56,
+                              child: TextField(
+                                controller: _tempoController,
+                                keyboardType: TextInputType.number,
+                                enabled: _lockTempo,
+                                textAlign: TextAlign.center,
+                                decoration: const InputDecoration(
+                                  isDense: true,
+                                  contentPadding: EdgeInsets.symmetric(vertical: 8),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            const Text('BPM'),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Material(
+                color: const Color(0xFF1A1C22),
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: colorScheme.primary.withValues(alpha: 0.30),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Switch(
+                        value: _lockMeter,
+                        onChanged: (value) {
+                          setState(() => _lockMeter = value);
+                        },
+                      ),
+                      const SizedBox(width: 4),
+                      const Text(
+                        'Meter Lock',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const Spacer(),
+                      Switch(
+                        value: _constrainToScale,
+                        onChanged: (value) {
+                          setState(() => _constrainToScale = value);
+                        },
+                      ),
+                      const SizedBox(width: 4),
+                      const Text(
+                        'Key/Scale Constraint',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(width: 10),
+                      SizedBox(
+                        width: 86,
+                        child: DropdownButtonFormField<String>(
+                          initialValue: _selectedKey,
+                          isDense: true,
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          ),
+                          items: const [
+                            'C', 'C#', 'D', 'D#', 'E', 'F',
+                            'F#', 'G', 'G#', 'A', 'A#', 'B',
+                          ]
+                              .map((k) => DropdownMenuItem(value: k, child: Text(k)))
+                              .toList(),
+                          onChanged: _constrainToScale
+                              ? (value) {
+                                  if (value == null) return;
+                                  setState(() => _selectedKey = value);
+                                }
+                              : null,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 92,
+                        child: DropdownButtonFormField<String>(
+                          initialValue: _selectedScale,
+                          isDense: true,
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          ),
+                          items: const ['Major', 'Minor']
+                              .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                              .toList(),
+                          onChanged: _constrainToScale
+                              ? (value) {
+                                  if (value == null) return;
+                                  setState(() => _selectedScale = value);
+                                }
+                              : null,
                         ),
                       ),
                     ],
@@ -968,6 +1145,7 @@ class _MyHomePageState extends State<MyHomePage> {
                       final itemId = item['id'] as int;
                       final audioPath = item['audio_path'] as String;
                       final isPlaying = _playingSketchId == itemId;
+                      final isLoading = _loadingSketchId == itemId;
                       final isUploading = item['_is_uploading'] == true;
                       final uploadFailed = item['_upload_failed'] == true;
 
@@ -1035,14 +1213,23 @@ class _MyHomePageState extends State<MyHomePage> {
                                   tooltip: "Konwertuj na MIDI",
                                 ),
                                 IconButton(
-                                  icon: Icon(
-                                    isPlaying
-                                        ? Icons.stop_circle
-                                        : Icons.play_arrow,
-                                    color: isPlaying
-                                        ? Colors.redAccent
-                                        : colorScheme.primary,
-                                  ),
+                                  icon: isLoading
+                                      ? SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2.4,
+                                            color: colorScheme.primary,
+                                          ),
+                                        )
+                                      : Icon(
+                                          isPlaying
+                                              ? Icons.stop_circle
+                                              : Icons.play_arrow,
+                                          color: isPlaying
+                                              ? Colors.redAccent
+                                              : colorScheme.primary,
+                                        ),
                                   onPressed: () =>
                                       playOrStopSketch(itemId, audioPath),
                                   tooltip: isPlaying
@@ -1060,7 +1247,16 @@ class _MyHomePageState extends State<MyHomePage> {
               ),
             ),
           ],
-        ),
+            ),
+          ),
+          if (_isGeneratingMidiPreview)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black54,
+                child: const Center(child: CircularProgressIndicator()),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -1071,12 +1267,55 @@ class _MyHomePageState extends State<MyHomePage> {
     final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
     return '$minutes:$seconds';
   }
+
+  ({int beatsPerMeasure, int beatUnit}) _parseMeter() {
+    final top = int.tryParse(_timeSigTopController.text.trim()) ?? 4;
+    final bottom = int.tryParse(_timeSigBottomController.text.trim()) ?? 4;
+    final normalizedTop = top.clamp(1, 12);
+    final allowedBottom = const [1, 2, 4, 8, 16, 32];
+    final normalizedBottom = allowedBottom.contains(bottom) ? bottom : 4;
+    return (beatsPerMeasure: normalizedTop, beatUnit: normalizedBottom);
+  }
+
+  int _parseTempoBpm() {
+    final bpm = int.tryParse(_tempoController.text.trim()) ?? 120;
+    return bpm.clamp(40, 240);
+  }
+
+  int _keyNameToPitchClass(String key) {
+    const mapping = <String, int>{
+      'C': 0,
+      'C#': 1,
+      'D': 2,
+      'D#': 3,
+      'E': 4,
+      'F': 5,
+      'F#': 6,
+      'G': 7,
+      'G#': 8,
+      'A': 9,
+      'A#': 10,
+      'B': 11,
+    };
+    return mapping[key] ?? 0;
+  }
 }
 
 class MidiEditorDialog extends StatefulWidget {
-  const MidiEditorDialog({super.key, required this.parsed});
+  const MidiEditorDialog({
+    super.key,
+    required this.parsed,
+    required this.tempoOverrideBpm,
+    required this.beatsPerMeasureOverride,
+    required this.beatUnitOverride,
+    this.keyScaleConstraint,
+  });
 
   final ParsedMidi parsed;
+  final int tempoOverrideBpm;
+  final int beatsPerMeasureOverride;
+  final int beatUnitOverride;
+  final KeyScaleConstraint? keyScaleConstraint;
 
   @override
   State<MidiEditorDialog> createState() => _MidiEditorDialogState();
@@ -1084,12 +1323,20 @@ class MidiEditorDialog extends StatefulWidget {
 
 class _MidiEditorDialogState extends State<MidiEditorDialog> {
   late List<EditableMidiNote> _notes;
+  late int _rollMinNote;
+  late int _rollMaxNote;
   int _selectedIndex = -1;
-  int _gridDivider = 8;
-  static const int _beatsPerBar = 4;
+  int _gridDivider = 4;
   final bool _showConfidenceHeatmap = false;
   final List<List<EditableMidiNote>> _undoStack = [];
   final List<List<EditableMidiNote>> _redoStack = [];
+  bool _isPreviewPlaying = false;
+  double _playheadTick = 0;
+  Timer? _previewTimer;
+  final AudioPlayer _previewPlayer = AudioPlayer();
+  String? _previewWavPath;
+  int? _erasePointer;
+  final Set<int> _erasedIndices = <int>{};
 
   @override
   void initState() {
@@ -1098,6 +1345,27 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
         .map((n) => EditableMidiNote.copy(n))
         .toList()
       ..sort((a, b) => a.startTick.compareTo(b.startTick));
+    _rollMinNote = _notes.isEmpty
+        ? 48
+        : (_notes.map((e) => e.note).reduce(math.min) - 2).clamp(0, 127);
+    _rollMaxNote = _notes.isEmpty
+        ? 72
+        : (_notes.map((e) => e.note).reduce(math.max) + 2).clamp(0, 127);
+    if (_rollMaxNote <= _rollMinNote) {
+      _rollMinNote = 48;
+      _rollMaxNote = 72;
+    }
+    _alignNotesToStart(_notes);
+    if (widget.keyScaleConstraint != null) {
+      _constrainNotesToScale(_notes, widget.keyScaleConstraint!);
+    }
+  }
+
+  @override
+  void dispose() {
+    _previewTimer?.cancel();
+    _previewPlayer.dispose();
+    super.dispose();
   }
 
   void _deleteSelected() {
@@ -1111,18 +1379,285 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
 
   void _quantizeAll() {
     _commitUndoState();
-    final grid = (widget.parsed.ticksPerQuarter / _gridDivider).round();
-    if (grid <= 0) return;
+    if (_notes.isEmpty) return;
     setState(() {
-      for (final note in _notes) {
-        note.startTick = ((note.startTick / grid).round() * grid).clamp(0, 1 << 30);
-        note.durationTicks = math.max(
-          grid,
-          ((note.durationTicks / grid).round() * grid),
-        );
-      }
+      _intelligentQuantize();
       _notes.sort((a, b) => a.startTick.compareTo(b.startTick));
     });
+  }
+
+  void _intelligentQuantize() {
+    final tpq = widget.parsed.ticksPerQuarter;
+    final measureTicks =
+        ((tpq * 4 * widget.beatsPerMeasureOverride) / widget.beatUnitOverride)
+            .round()
+            .clamp(1, 1 << 30);
+    final beatTicks =
+        ((tpq * 4) / widget.beatUnitOverride).round().clamp(1, 1 << 30);
+    final candidateSteps = _candidateOnsetSteps(tpq);
+    final onsetStep = _bestOnsetStep(candidateSteps);
+    final gridPhase = _bestGridPhase(
+      onsetStep: onsetStep,
+      measureTicks: measureTicks,
+      beatTicks: beatTicks,
+    );
+    final durationValues = _candidateDurations(tpq);
+
+    for (var i = 0; i < _notes.length; i++) {
+      final note = _notes[i];
+      final quantizedStart = _snapToGridWithPhase(
+        note.startTick,
+        onsetStep,
+        gridPhase,
+      );
+
+      final rawEnd = note.startTick + note.durationTicks;
+      final suggestedEnd = i < _notes.length - 1
+          ? _snapToGridWithPhase(_notes[i + 1].startTick, onsetStep, gridPhase)
+          : _snapToGridWithPhase(rawEnd, onsetStep, gridPhase);
+      var targetDuration = math.max(1, suggestedEnd - quantizedStart);
+      targetDuration = _closestDuration(targetDuration, durationValues);
+
+      if (i < _notes.length - 1) {
+        final nextStart = _snapToGridWithPhase(
+          _notes[i + 1].startTick,
+          onsetStep,
+          gridPhase,
+        );
+        targetDuration = math.min(targetDuration, math.max(1, nextStart - quantizedStart));
+      }
+
+      note.startTick = math.max(0, quantizedStart);
+      note.durationTicks = math.max(onsetStep, targetDuration);
+    }
+
+    _regularizeSteadyRuns(
+      onsetStep: onsetStep,
+      durationValues: durationValues,
+      gridPhase: gridPhase,
+    );
+
+    // Keep measure boundaries clean.
+    for (final note in _notes) {
+      final barStart = (note.startTick ~/ measureTicks) * measureTicks;
+      final barEnd = barStart + measureTicks;
+      if (note.startTick + note.durationTicks > barEnd + onsetStep) {
+        note.durationTicks = math.max(onsetStep, barEnd - note.startTick);
+      }
+    }
+  }
+
+  void _regularizeSteadyRuns({
+    required int onsetStep,
+    required List<int> durationValues,
+    required int gridPhase,
+  }) {
+    if (_notes.length < 3) return;
+    if (_hasStrongPolyphony()) return;
+
+    final intervals = <int>[];
+    for (var i = 1; i < _notes.length; i++) {
+      intervals.add(math.max(onsetStep, _notes[i].startTick - _notes[i - 1].startTick));
+    }
+    if (intervals.isEmpty) return;
+
+    final snappedIntervals = intervals
+        .map((i) => _closestDuration(i, durationValues))
+        .toList();
+    final dominantInterval = _modeInt(snappedIntervals);
+    if (dominantInterval <= 0) return;
+
+    final tolerance = math.max(onsetStep, (dominantInterval * 0.35).round());
+    var runStart = 0;
+    for (var i = 1; i < _notes.length; i++) {
+      final gap = _notes[i].startTick - _notes[i - 1].startTick;
+      final inRun = (gap - dominantInterval).abs() <= tolerance;
+      if (!inRun) {
+        _regularizeRun(
+          runStart,
+          i - 1,
+          dominantInterval,
+          onsetStep,
+          gridPhase,
+        );
+        runStart = i;
+      }
+    }
+    _regularizeRun(
+      runStart,
+      _notes.length - 1,
+      dominantInterval,
+      onsetStep,
+      gridPhase,
+    );
+  }
+
+  bool _hasStrongPolyphony() {
+    var overlaps = 0;
+    for (var i = 1; i < _notes.length; i++) {
+      final prevEnd = _notes[i - 1].startTick + _notes[i - 1].durationTicks;
+      if (_notes[i].startTick < prevEnd - _gridTick()) overlaps++;
+    }
+    return overlaps > (_notes.length * 0.2).round();
+  }
+
+  void _regularizeRun(
+    int startIndex,
+    int endIndex,
+    int step,
+    int onsetStep,
+    int gridPhase,
+  ) {
+    final runLength = endIndex - startIndex + 1;
+    if (runLength < 3) return;
+    final anchor = _snapToGridWithPhase(
+      _notes[startIndex].startTick,
+      onsetStep,
+      gridPhase,
+    );
+    for (var i = 0; i < runLength; i++) {
+      final note = _notes[startIndex + i];
+      note.startTick = anchor + (i * step);
+      note.durationTicks = step;
+    }
+  }
+
+  int _bestGridPhase({
+    required int onsetStep,
+    required int measureTicks,
+    required int beatTicks,
+  }) {
+    final phases = <int>{0};
+    final slotsPerBar = math.max(1, measureTicks ~/ onsetStep);
+    for (var i = 0; i < slotsPerBar; i++) {
+      phases.add(i * onsetStep);
+    }
+
+    var bestPhase = 0;
+    var bestScore = double.infinity;
+    for (final phase in phases) {
+      var score = 0.0;
+      for (final note in _notes) {
+        final snapped = _snapToGridWithPhase(note.startTick, onsetStep, phase);
+        score += (note.startTick - snapped).abs();
+
+        // Prefer beat-aligned subdivisions inside the selected meter.
+        final snappedInBar = ((snapped % measureTicks) + measureTicks) % measureTicks;
+        final beatDistance = _distanceToNearestMultiple(snappedInBar, beatTicks);
+        score += beatDistance * 0.08;
+      }
+      if (score < bestScore) {
+        bestScore = score;
+        bestPhase = phase;
+      }
+    }
+    return bestPhase;
+  }
+
+  int _distanceToNearestMultiple(int value, int step) {
+    if (step <= 0) return 0;
+    final down = (value ~/ step) * step;
+    final up = down + step;
+    return math.min((value - down).abs(), (up - value).abs());
+  }
+
+  int _snapToGridWithPhase(int value, int grid, int phase) {
+    if (grid <= 0) return value;
+    final shifted = value - phase;
+    return ((shifted / grid).round() * grid) + phase;
+  }
+
+  int _modeInt(List<int> values) {
+    final buckets = <int, int>{};
+    for (final v in values) {
+      buckets[v] = (buckets[v] ?? 0) + 1;
+    }
+    var bestValue = values.first;
+    var bestCount = -1;
+    for (final entry in buckets.entries) {
+      if (entry.value > bestCount) {
+        bestValue = entry.key;
+        bestCount = entry.value;
+      }
+    }
+    return bestValue;
+  }
+
+  List<int> _candidateOnsetSteps(int tpq) {
+    final whole = tpq * 4;
+    final steps = <int>{
+      math.max(1, (whole / 32).round()),
+      math.max(1, (whole / 24).round()),
+      math.max(1, (whole / 16).round()),
+      math.max(1, (whole / 12).round()),
+      math.max(1, (whole / 8).round()),
+      math.max(1, (whole / 6).round()),
+      math.max(1, (whole / 4).round()),
+    };
+    return steps.toList()..sort();
+  }
+
+  int _bestOnsetStep(List<int> candidates) {
+    if (_notes.length < 2) return candidates.first;
+    var bestStep = candidates.first;
+    var bestScore = double.infinity;
+    for (final step in candidates) {
+      var score = 0.0;
+      for (final note in _notes) {
+        final snapped = _snapToGrid(note.startTick, step);
+        score += (note.startTick - snapped).abs();
+      }
+      for (var i = 1; i < _notes.length; i++) {
+        final interval = _notes[i].startTick - _notes[i - 1].startTick;
+        final snappedInterval = _snapToGrid(interval, step);
+        score += (interval - snappedInterval).abs() * 0.75;
+      }
+      if (score < bestScore) {
+        bestScore = score;
+        bestStep = step;
+      }
+    }
+    return bestStep;
+  }
+
+  List<int> _candidateDurations(int tpq) {
+    final whole = tpq * 4;
+    final fractions = <double>[
+      1 / 32,
+      1 / 16,
+      3 / 32,
+      1 / 8,
+      3 / 16,
+      1 / 4,
+      3 / 8,
+      1 / 2,
+      3 / 4,
+      1.0,
+    ];
+    final durations = fractions
+        .map((f) => math.max(1, (whole * f).round()))
+        .toSet()
+        .toList()
+      ..sort();
+    return durations;
+  }
+
+  int _closestDuration(int value, List<int> candidates) {
+    var best = candidates.first;
+    var bestDist = (value - best).abs();
+    for (final c in candidates.skip(1)) {
+      final dist = (value - c).abs();
+      if (dist < bestDist) {
+        best = c;
+        bestDist = dist;
+      }
+    }
+    return best;
+  }
+
+  int _snapToGrid(int value, int grid) {
+    if (grid <= 0) return value;
+    return (value / grid).round() * grid;
   }
 
   int _gridTick() {
@@ -1132,6 +1667,118 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
   int _snapTick(int tick) {
     final grid = _gridTick();
     return (tick / grid).round() * grid;
+  }
+
+  Future<void> _togglePreviewPlayback(int tickEnd) async {
+    if (_isPreviewPlaying) {
+      _previewTimer?.cancel();
+      await _previewPlayer.stop();
+      if (mounted) {
+        setState(() => _isPreviewPlaying = false);
+      }
+      return;
+    }
+    final ticksPerSecond =
+        (widget.parsed.ticksPerQuarter * widget.tempoOverrideBpm) / 60.0;
+    if (ticksPerSecond <= 0) return;
+    final maxTick = math.max(1, tickEnd);
+    if (_playheadTick >= maxTick) _playheadTick = 0;
+    _previewTimer?.cancel();
+    final wavPath = await _buildPreviewWav(tickEnd);
+    await _previewPlayer.stop();
+    await _previewPlayer.setSourceDeviceFile(wavPath);
+    await _previewPlayer.resume();
+    if (!mounted) return;
+    setState(() => _isPreviewPlaying = true);
+    _previewTimer = Timer.periodic(const Duration(milliseconds: 16), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        _playheadTick += ticksPerSecond * 0.016;
+        if (_playheadTick >= maxTick) {
+          _playheadTick = maxTick.toDouble();
+          _isPreviewPlaying = false;
+          timer.cancel();
+        }
+      });
+    });
+  }
+
+  Future<void> _rewindPreview() async {
+    _previewTimer?.cancel();
+    await _previewPlayer.stop();
+    if (!mounted) return;
+    setState(() {
+      _isPreviewPlaying = false;
+      _playheadTick = 0;
+    });
+  }
+
+  Future<String> _buildPreviewWav(int tickEnd) async {
+    final sampleRate = 44100;
+    final durationSeconds =
+        ((tickEnd / widget.parsed.ticksPerQuarter) * (60.0 / widget.tempoOverrideBpm))
+            .clamp(0.4, 120.0);
+    final sampleCount = math.max(1, (durationSeconds * sampleRate).round());
+    final samples = Float64List(sampleCount);
+
+    final attackSamples = (0.005 * sampleRate).round();
+    final releaseSamples = (0.020 * sampleRate).round();
+    for (final note in _notes) {
+      final startSec =
+          (note.startTick / widget.parsed.ticksPerQuarter) * (60.0 / widget.tempoOverrideBpm);
+      final endSec = ((note.startTick + note.durationTicks) / widget.parsed.ticksPerQuarter) *
+          (60.0 / widget.tempoOverrideBpm);
+      final start = (startSec * sampleRate).round().clamp(0, sampleCount - 1);
+      final end = (endSec * sampleRate).round().clamp(start + 1, sampleCount);
+      final freq = 440.0 * math.pow(2.0, (note.note - 69) / 12.0);
+      final velocity = (note.velocity.clamp(1, 127) / 127.0) * 0.20;
+      for (var i = start; i < end; i++) {
+        final local = i - start;
+        final remain = end - i;
+        var env = 1.0;
+        if (local < attackSamples) env = local / math.max(1, attackSamples);
+        if (remain < releaseSamples) env = math.min(env, remain / math.max(1, releaseSamples));
+        samples[i] += math.sin(2 * math.pi * freq * (local / sampleRate)) * velocity * env;
+      }
+    }
+
+    var peak = 0.0;
+    for (final s in samples) {
+      peak = math.max(peak, s.abs());
+    }
+    if (peak > 0.98) {
+      final gain = 0.98 / peak;
+      for (var i = 0; i < samples.length; i++) {
+        samples[i] *= gain;
+      }
+    }
+
+    final dir = await getTemporaryDirectory();
+    _previewWavPath ??= '${dir.path}/midieval_preview.wav';
+    final wavBytes = Wav([samples], sampleRate).write();
+    await File(_previewWavPath!).writeAsBytes(wavBytes, flush: true);
+    return _previewWavPath!;
+  }
+
+  void _eraseAtPosition(
+    Offset localPosition, {
+    required int maxNote,
+    required double laneHeight,
+    required double tickScale,
+  }) {
+    final tick = (localPosition.dx / tickScale).round();
+    final noteValue = maxNote - (localPosition.dy / laneHeight).floor();
+    final idx = _notes.indexWhere((n) {
+      final end = n.startTick + n.durationTicks;
+      return noteValue == n.note && tick >= n.startTick && tick <= end;
+    });
+    if (idx < 0 || _erasedIndices.contains(idx)) return;
+    _erasedIndices.add(idx);
+    _notes.removeAt(idx);
+    if (_selectedIndex == idx) _selectedIndex = -1;
   }
 
   void _commitUndoState() {
@@ -1160,12 +1807,8 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final minNote = _notes.isEmpty
-        ? 48
-        : _notes.map((e) => e.note).reduce(math.min);
-    final maxNote = _notes.isEmpty
-        ? 72
-        : _notes.map((e) => e.note).reduce(math.max);
+    final minNote = _rollMinNote;
+    final maxNote = _rollMaxNote;
     final tickEnd = _notes.isEmpty
         ? widget.parsed.ticksPerQuarter * 4
         : _notes
@@ -1181,6 +1824,7 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
           control: true,
           shift: true,
         ): RedoIntent(),
+        SingleActivator(LogicalKeyboardKey.space): PlayPreviewIntent(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
@@ -1190,6 +1834,10 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
           }),
           RedoIntent: CallbackAction<RedoIntent>(onInvoke: (intent) {
             _redo();
+            return null;
+          }),
+          PlayPreviewIntent: CallbackAction<PlayPreviewIntent>(onInvoke: (intent) {
+            unawaited(_togglePreviewPlayback(tickEnd));
             return null;
           }),
         },
@@ -1224,8 +1872,8 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
                   value: _gridDivider,
                   items: const [
                     DropdownMenuItem(value: 4, child: Text('1/4')),
-                    DropdownMenuItem(value: 8, child: Text('1/8')),
-                    DropdownMenuItem(value: 16, child: Text('1/16')),
+                    DropdownMenuItem(value: 3, child: Text('1/3')),
+                    DropdownMenuItem(value: 6, child: Text('1/6')),
                   ],
                   onChanged: (value) {
                     if (value == null) return;
@@ -1233,6 +1881,17 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
                   },
                 ),
                 const SizedBox(width: 8),
+                IconButton(
+                  onPressed: () => unawaited(_togglePreviewPlayback(tickEnd)),
+                  icon: Icon(_isPreviewPlaying ? Icons.stop : Icons.play_arrow),
+                  tooltip: 'Play/Pause (Space)',
+                ),
+                IconButton(
+                  onPressed: () => unawaited(_rewindPreview()),
+                  icon: const Icon(Icons.replay),
+                  tooltip: 'Rewind to start',
+                ),
+                const SizedBox(width: 4),
                 FilledButton.tonal(
                   onPressed: _quantizeAll,
                   child: const Text('Quantize'),
@@ -1245,66 +1904,102 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
                 builder: (context, constraints) {
                   final noteSpan = math.max(12, maxNote - minNote + 1);
                   final laneHeight = constraints.maxHeight / noteSpan;
-                  return Row(
-                    children: [
-                      SizedBox(
-                        width: 72,
-                        child: _buildPianoKeys(
-                          maxNote: maxNote,
-                          noteSpan: noteSpan,
-                          laneHeight: laneHeight,
-                        ),
-                      ),
-                      Expanded(
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF111216),
-                            borderRadius: BorderRadius.circular(8),
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF111216),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: LayoutBuilder(
+                      builder: (context, inner) {
+                        final tickScale = inner.maxWidth / math.max(1, tickEnd);
+                        final barTicks =
+                            ((widget.parsed.ticksPerQuarter * 4 * widget.beatsPerMeasureOverride) /
+                                    widget.beatUnitOverride)
+                                .round();
+                        final beatTicks =
+                            ((widget.parsed.ticksPerQuarter * 4) / widget.beatUnitOverride)
+                                .round();
+                        return Listener(
+                          onPointerDown: (event) {
+                            if ((event.buttons & kSecondaryMouseButton) != 0) {
+                              _commitUndoState();
+                              setState(() {
+                                _erasePointer = event.pointer;
+                                _erasedIndices.clear();
+                                _eraseAtPosition(
+                                  event.localPosition,
+                                  maxNote: maxNote,
+                                  laneHeight: laneHeight,
+                                  tickScale: tickScale,
+                                );
+                              });
+                            }
+                          },
+                          onPointerMove: (event) {
+                            if (_erasePointer == event.pointer &&
+                                (event.buttons & kSecondaryMouseButton) != 0) {
+                              setState(() {
+                                _eraseAtPosition(
+                                  event.localPosition,
+                                  maxNote: maxNote,
+                                  laneHeight: laneHeight,
+                                  tickScale: tickScale,
+                                );
+                              });
+                            }
+                          },
+                          onPointerUp: (event) {
+                            if (_erasePointer == event.pointer) {
+                              setState(() {
+                                _erasePointer = null;
+                                _erasedIndices.clear();
+                              });
+                            }
+                          },
+                          child: Stack(
+                            children: [
+                              for (var tick = 0; tick <= tickEnd; tick += _gridTick())
+                                Positioned(
+                                  left: tick * tickScale,
+                                  top: 0,
+                                  bottom: 0,
+                                  child: Container(
+                                    width: tick % barTicks == 0 ? 2 : 1,
+                                    color: tick % barTicks == 0
+                                        ? const Color(0xFF3A3F4D)
+                                        : tick % beatTicks == 0
+                                        ? const Color(0xFF2A2D36)
+                                        : const Color(0xFF1A1C22),
+                                  ),
+                                ),
+                              for (var i = 0; i <= noteSpan; i++)
+                                Positioned(
+                                  top: i * laneHeight,
+                                  left: 0,
+                                  right: 0,
+                                  child: Container(height: 1, color: const Color(0xFF1E2128)),
+                                ),
+                              if (_isPreviewPlaying || _playheadTick > 0)
+                                Positioned(
+                                  left: (_playheadTick * tickScale).clamp(0.0, inner.maxWidth - 1),
+                                  top: 0,
+                                  bottom: 0,
+                                  child: Container(width: 2, color: Colors.redAccent),
+                                ),
+                              for (var i = 0; i < _notes.length; i++)
+                                _buildNoteRect(
+                                  i,
+                                  _notes[i],
+                                  maxNote: maxNote,
+                                  laneHeight: laneHeight,
+                                  tickScale: tickScale,
+                                  showConfidenceHeatmap: _showConfidenceHeatmap,
+                                ),
+                            ],
                           ),
-                          child: LayoutBuilder(
-                            builder: (context, inner) {
-                              final tickScale = inner.maxWidth / math.max(1, tickEnd);
-                              final barTicks = widget.parsed.ticksPerQuarter * _beatsPerBar;
-                              final beatTicks = widget.parsed.ticksPerQuarter;
-                              return Stack(
-                                children: [
-                                  for (var tick = 0; tick <= tickEnd; tick += _gridTick())
-                                    Positioned(
-                                      left: tick * tickScale,
-                                      top: 0,
-                                      bottom: 0,
-                                      child: Container(
-                                        width: tick % barTicks == 0 ? 2 : 1,
-                                        color: tick % barTicks == 0
-                                            ? const Color(0xFF3A3F4D)
-                                            : tick % beatTicks == 0
-                                            ? const Color(0xFF2A2D36)
-                                            : const Color(0xFF1A1C22),
-                                      ),
-                                    ),
-                                  for (var i = 0; i <= noteSpan; i++)
-                                    Positioned(
-                                      top: i * laneHeight,
-                                      left: 0,
-                                      right: 0,
-                                      child: Container(height: 1, color: const Color(0xFF1E2128)),
-                                    ),
-                                  for (var i = 0; i < _notes.length; i++)
-                                    _buildNoteRect(
-                                      i,
-                                      _notes[i],
-                                      maxNote: maxNote,
-                                      laneHeight: laneHeight,
-                                      tickScale: tickScale,
-                                      showConfidenceHeatmap: _showConfidenceHeatmap,
-                                    ),
-                                ],
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                    ],
+                        );
+                      },
+                    ),
                   );
                 },
               ),
@@ -1319,7 +2014,12 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
         ),
         FilledButton(
           onPressed: () {
-            final output = widget.parsed.rebuild(_notes);
+            final output = widget.parsed.rebuild(
+              _notes,
+              tempoOverrideBpm: widget.tempoOverrideBpm,
+              beatsPerMeasureOverride: widget.beatsPerMeasureOverride,
+              beatUnitOverride: widget.beatUnitOverride,
+            );
             Navigator.pop(context, output);
           },
           child: const Text('Apply'),
@@ -1327,44 +2027,6 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
       ],
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildPianoKeys({
-    required int maxNote,
-    required int noteSpan,
-    required double laneHeight,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF0F1014),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Stack(
-        children: [
-          for (var i = 0; i < noteSpan; i++)
-            Positioned(
-              top: i * laneHeight,
-              left: 0,
-              right: 0,
-              height: laneHeight,
-              child: Container(
-                color: _isBlackKey(maxNote - i)
-                    ? const Color(0xFF1B1E26)
-                    : const Color(0xFFECECEC),
-                padding: const EdgeInsets.symmetric(horizontal: 5),
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  _midiToLabel(maxNote - i),
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: _isBlackKey(maxNote - i) ? Colors.white : Colors.black87,
-                  ),
-                ),
-              ),
-            ),
-        ],
       ),
     );
   }
@@ -1478,11 +2140,6 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     );
   }
 
-  bool _isBlackKey(int midiNote) {
-    final pc = midiNote % 12;
-    return pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10;
-  }
-
   String _midiToLabel(int midiNote) {
     const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
     return '${names[midiNote % 12]}${(midiNote ~/ 12) - 1}';
@@ -1510,6 +2167,52 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
         ) ??
         const Color(0xFF57C86A);
   }
+
+  void _constrainNotesToScale(
+    List<EditableMidiNote> notes,
+    KeyScaleConstraint constraint,
+  ) {
+    final allowedPitchClasses = constraint.isMinor
+        ? <int>{0, 2, 3, 5, 7, 8, 10}
+        : <int>{0, 2, 4, 5, 7, 9, 11};
+    for (final n in notes) {
+      n.note = _closestNoteInScale(n.note, constraint.tonic, allowedPitchClasses);
+    }
+  }
+
+  int _closestNoteInScale(int midiNote, int tonic, Set<int> scale) {
+    var best = midiNote;
+    var bestDistance = 999;
+    for (var delta = -3; delta <= 3; delta++) {
+      final candidate = (midiNote + delta).clamp(0, 127);
+      final pitchClass = ((candidate - tonic) % 12 + 12) % 12;
+      if (!scale.contains(pitchClass)) continue;
+      final distance = (candidate - midiNote).abs();
+      if (distance < bestDistance) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+    return best;
+  }
+
+  void _alignNotesToStart(List<EditableMidiNote> notes) {
+    if (notes.isEmpty) return;
+    final firstTick = notes
+        .map((n) => n.startTick)
+        .reduce(math.min);
+    if (firstTick <= 0) return;
+    for (final note in notes) {
+      note.startTick = math.max(0, note.startTick - firstTick);
+    }
+  }
+}
+
+class KeyScaleConstraint {
+  const KeyScaleConstraint({required this.tonic, required this.isMinor});
+
+  final int tonic;
+  final bool isMinor;
 }
 
 class UndoIntent extends Intent {
@@ -1518,6 +2221,10 @@ class UndoIntent extends Intent {
 
 class RedoIntent extends Intent {
   const RedoIntent();
+}
+
+class PlayPreviewIntent extends Intent {
+  const PlayPreviewIntent();
 }
 
 class EditableMidiNote {
@@ -1545,11 +2252,15 @@ class ParsedMidi {
   ParsedMidi({
     required this.ticksPerQuarter,
     required this.tempoBpm,
+    required this.beatsPerMeasure,
+    required this.beatUnit,
     required this.notes,
   });
 
   final int ticksPerQuarter;
   final int tempoBpm;
+  final int beatsPerMeasure;
+  final int beatUnit;
   final List<EditableMidiNote> notes;
 
   static ParsedMidi? tryParse(Uint8List bytes) {
@@ -1560,6 +2271,8 @@ class ParsedMidi {
     if (headerLength < 6 || bytes.length < 8 + headerLength) return null;
     final ticksPerQuarter = (bytes[12] << 8) | bytes[13];
     var tempoBpm = 120;
+    var beatsPerMeasure = 4;
+    var beatUnit = 4;
     final notes = <EditableMidiNote>[];
 
     var chunkOffset = 8 + headerLength;
@@ -1601,6 +2314,10 @@ class ParsedMidi {
             if (metaType == 0x51 && len.value == 3 && idx + 2 < chunkDataEnd) {
               final mpq = (bytes[idx] << 16) | (bytes[idx + 1] << 8) | bytes[idx + 2];
               if (mpq > 0) tempoBpm = (60000000 / mpq).round();
+            } else if (metaType == 0x58 && len.value >= 2 && idx + 1 < chunkDataEnd) {
+              beatsPerMeasure = bytes[idx].clamp(1, 12);
+              final denominatorPower = bytes[idx + 1].clamp(0, 8);
+              beatUnit = 1 << denominatorPower;
             }
             idx += len.value;
             continue;
@@ -1651,16 +2368,31 @@ class ParsedMidi {
     return ParsedMidi(
       ticksPerQuarter: ticksPerQuarter > 0 ? ticksPerQuarter : 480,
       tempoBpm: tempoBpm,
+      beatsPerMeasure: beatsPerMeasure,
+      beatUnit: beatUnit,
       notes: notes,
     );
   }
 
-  Uint8List rebuild(List<EditableMidiNote> edited) {
+  Uint8List rebuild(
+    List<EditableMidiNote> edited, {
+    int? tempoOverrideBpm,
+    int? beatsPerMeasureOverride,
+    int? beatUnitOverride,
+  }) {
     final track = <int>[];
-    final mpq = (60000000 / math.max(1, tempoBpm)).round();
+    final effectiveTempo = math.max(1, tempoOverrideBpm ?? tempoBpm);
+    final effectiveBeatsPerMeasure = (beatsPerMeasureOverride ?? beatsPerMeasure).clamp(1, 12);
+    final allowedBeatUnits = {1, 2, 4, 8, 16, 32, 64, 128, 256};
+    final candidateBeatUnit = beatUnitOverride ?? beatUnit;
+    final effectiveBeatUnit = allowedBeatUnits.contains(candidateBeatUnit)
+        ? candidateBeatUnit
+        : 4;
+    final mpq = (60000000 / effectiveTempo).round();
+    final denominatorPower = (math.log(effectiveBeatUnit) / math.ln2).round().clamp(0, 8);
     track.addAll([
       0x00, 0xFF, 0x51, 0x03, (mpq >> 16) & 0xFF, (mpq >> 8) & 0xFF, mpq & 0xFF,
-      0x00, 0xFF, 0x58, 0x04, 0x04, 0x02, 0x18, 0x08,
+      0x00, 0xFF, 0x58, 0x04, effectiveBeatsPerMeasure, denominatorPower, 0x18, 0x08,
       0x00, 0xC0, 0x00,
     ]);
 
