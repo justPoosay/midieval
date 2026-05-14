@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
@@ -641,6 +642,10 @@ class _MyHomePageState extends State<MyHomePage> {
 
       // 3. Wywołujemy silnik z osobnego pliku (ten, który ma tylko 1 nutę)
       final midiBytes = await _convertWithBasicPitch(audioBytes);
+      final editedMidiBytes = await _openMidiEditor(midiBytes);
+      if (editedMidiBytes == null) {
+        return;
+      }
 
       // 4. Tworzymy unikalną nazwę, żeby uniknąć starych plików w pamięci
       final String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
@@ -651,7 +656,7 @@ class _MyHomePageState extends State<MyHomePage> {
           .from('audio-samples')
           .uploadBinary(
             midiFileName,
-            midiBytes,
+            editedMidiBytes,
             fileOptions: const FileOptions(
               contentType: 'audio/midi',
               upsert: true,
@@ -687,6 +692,27 @@ class _MyHomePageState extends State<MyHomePage> {
         );
       }
     }
+  }
+
+  Future<Uint8List?> _openMidiEditor(Uint8List midiBytes) async {
+    final parsed = ParsedMidi.tryParse(midiBytes);
+    if (parsed == null || parsed.notes.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('MIDI editor skipped: could not parse note events.'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+      return midiBytes;
+    }
+    if (!mounted) return midiBytes;
+    return showDialog<Uint8List>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => MidiEditorDialog(parsed: parsed),
+    );
   }
 
   @override
@@ -987,6 +1013,658 @@ class _MyHomePageState extends State<MyHomePage> {
       ),
     );
   }
+}
+
+class MidiEditorDialog extends StatefulWidget {
+  const MidiEditorDialog({super.key, required this.parsed});
+
+  final ParsedMidi parsed;
+
+  @override
+  State<MidiEditorDialog> createState() => _MidiEditorDialogState();
+}
+
+class _MidiEditorDialogState extends State<MidiEditorDialog> {
+  late List<EditableMidiNote> _notes;
+  int _selectedIndex = -1;
+  int _gridDivider = 8;
+  static const int _beatsPerBar = 4;
+  final List<List<EditableMidiNote>> _undoStack = [];
+  final List<List<EditableMidiNote>> _redoStack = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _notes = widget.parsed.notes
+        .map((n) => EditableMidiNote.copy(n))
+        .toList()
+      ..sort((a, b) => a.startTick.compareTo(b.startTick));
+  }
+
+  void _deleteSelected() {
+    if (_selectedIndex < 0 || _selectedIndex >= _notes.length) return;
+    _commitUndoState();
+    setState(() {
+      _notes.removeAt(_selectedIndex);
+      _selectedIndex = -1;
+    });
+  }
+
+  void _quantizeAll() {
+    _commitUndoState();
+    final grid = (widget.parsed.ticksPerQuarter / _gridDivider).round();
+    if (grid <= 0) return;
+    setState(() {
+      for (final note in _notes) {
+        note.startTick = ((note.startTick / grid).round() * grid).clamp(0, 1 << 30);
+        note.durationTicks = math.max(
+          grid,
+          ((note.durationTicks / grid).round() * grid),
+        );
+      }
+      _notes.sort((a, b) => a.startTick.compareTo(b.startTick));
+    });
+  }
+
+  int _gridTick() {
+    return math.max(1, (widget.parsed.ticksPerQuarter / _gridDivider).round());
+  }
+
+  int _snapTick(int tick) {
+    final grid = _gridTick();
+    return (tick / grid).round() * grid;
+  }
+
+  void _commitUndoState() {
+    _undoStack.add(_notes.map((n) => EditableMidiNote.copy(n)).toList());
+    if (_undoStack.length > 80) _undoStack.removeAt(0);
+    _redoStack.clear();
+  }
+
+  void _undo() {
+    if (_undoStack.isEmpty) return;
+    setState(() {
+      _redoStack.add(_notes.map((n) => EditableMidiNote.copy(n)).toList());
+      _notes = _undoStack.removeLast().map((n) => EditableMidiNote.copy(n)).toList();
+      if (_selectedIndex >= _notes.length) _selectedIndex = -1;
+    });
+  }
+
+  void _redo() {
+    if (_redoStack.isEmpty) return;
+    setState(() {
+      _undoStack.add(_notes.map((n) => EditableMidiNote.copy(n)).toList());
+      _notes = _redoStack.removeLast().map((n) => EditableMidiNote.copy(n)).toList();
+      if (_selectedIndex >= _notes.length) _selectedIndex = -1;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final minNote = _notes.isEmpty
+        ? 48
+        : _notes.map((e) => e.note).reduce(math.min);
+    final maxNote = _notes.isEmpty
+        ? 72
+        : _notes.map((e) => e.note).reduce(math.max);
+    final tickEnd = _notes.isEmpty
+        ? widget.parsed.ticksPerQuarter * 4
+        : _notes
+              .map((e) => e.startTick + e.durationTicks)
+              .reduce(math.max) +
+          widget.parsed.ticksPerQuarter;
+
+    return Shortcuts(
+      shortcuts: const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.keyZ, control: true): UndoIntent(),
+        SingleActivator(
+          LogicalKeyboardKey.keyZ,
+          control: true,
+          shift: true,
+        ): RedoIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          UndoIntent: CallbackAction<UndoIntent>(onInvoke: (intent) {
+            _undo();
+            return null;
+          }),
+          RedoIntent: CallbackAction<RedoIntent>(onInvoke: (intent) {
+            _redo();
+            return null;
+          }),
+        },
+        child: Focus(
+          autofocus: true,
+          child: AlertDialog(
+      title: const Text('Edit MIDI'),
+      content: SizedBox(
+        width: 760,
+        height: 420,
+        child: Column(
+          children: [
+            Row(
+              children: [
+                IconButton(
+                  onPressed: _selectedIndex >= 0 ? _deleteSelected : null,
+                  icon: const Icon(Icons.delete_outline),
+                  tooltip: 'Delete note',
+                ),
+                IconButton(
+                  onPressed: _undoStack.isNotEmpty ? _undo : null,
+                  icon: const Icon(Icons.undo),
+                  tooltip: 'Undo',
+                ),
+                IconButton(
+                  onPressed: _redoStack.isNotEmpty ? _redo : null,
+                  icon: const Icon(Icons.redo),
+                  tooltip: 'Redo',
+                ),
+                const SizedBox(width: 12),
+                DropdownButton<int>(
+                  value: _gridDivider,
+                  items: const [
+                    DropdownMenuItem(value: 4, child: Text('1/4')),
+                    DropdownMenuItem(value: 8, child: Text('1/8')),
+                    DropdownMenuItem(value: 16, child: Text('1/16')),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => _gridDivider = value);
+                  },
+                ),
+                const SizedBox(width: 8),
+                FilledButton.tonal(
+                  onPressed: _quantizeAll,
+                  child: const Text('Quantize'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final noteSpan = math.max(12, maxNote - minNote + 1);
+                  final laneHeight = constraints.maxHeight / noteSpan;
+                  return Row(
+                    children: [
+                      SizedBox(
+                        width: 72,
+                        child: _buildPianoKeys(
+                          maxNote: maxNote,
+                          noteSpan: noteSpan,
+                          laneHeight: laneHeight,
+                        ),
+                      ),
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF111216),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: LayoutBuilder(
+                            builder: (context, inner) {
+                              final tickScale = inner.maxWidth / math.max(1, tickEnd);
+                              final barTicks = widget.parsed.ticksPerQuarter * _beatsPerBar;
+                              final beatTicks = widget.parsed.ticksPerQuarter;
+                              return Stack(
+                                children: [
+                                  for (var tick = 0; tick <= tickEnd; tick += _gridTick())
+                                    Positioned(
+                                      left: tick * tickScale,
+                                      top: 0,
+                                      bottom: 0,
+                                      child: Container(
+                                        width: tick % barTicks == 0 ? 2 : 1,
+                                        color: tick % barTicks == 0
+                                            ? const Color(0xFF3A3F4D)
+                                            : tick % beatTicks == 0
+                                            ? const Color(0xFF2A2D36)
+                                            : const Color(0xFF1A1C22),
+                                      ),
+                                    ),
+                                  for (var i = 0; i <= noteSpan; i++)
+                                    Positioned(
+                                      top: i * laneHeight,
+                                      left: 0,
+                                      right: 0,
+                                      child: Container(height: 1, color: const Color(0xFF1E2128)),
+                                    ),
+                                  for (var i = 0; i < _notes.length; i++)
+                                    _buildNoteRect(
+                                      i,
+                                      _notes[i],
+                                      maxNote: maxNote,
+                                      laneHeight: laneHeight,
+                                      tickScale: tickScale,
+                                    ),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final output = widget.parsed.rebuild(_notes);
+            Navigator.pop(context, output);
+          },
+          child: const Text('Apply'),
+        ),
+      ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPianoKeys({
+    required int maxNote,
+    required int noteSpan,
+    required double laneHeight,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F1014),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Stack(
+        children: [
+          for (var i = 0; i < noteSpan; i++)
+            Positioned(
+              top: i * laneHeight,
+              left: 0,
+              right: 0,
+              height: laneHeight,
+              child: Container(
+                color: _isBlackKey(maxNote - i)
+                    ? const Color(0xFF1B1E26)
+                    : const Color(0xFFECECEC),
+                padding: const EdgeInsets.symmetric(horizontal: 5),
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _midiToLabel(maxNote - i),
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: _isBlackKey(maxNote - i) ? Colors.white : Colors.black87,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNoteRect(
+    int index,
+    EditableMidiNote note, {
+    required int maxNote,
+    required double laneHeight,
+    required double tickScale,
+  }) {
+    final top = (maxNote - note.note);
+    final rectTop = (math.max(0, top.toDouble())) * laneHeight;
+    final left = note.startTick * tickScale;
+    final width = math.max(6.0, note.durationTicks * tickScale);
+    final grid = _gridTick();
+    return Positioned(
+      top: rectTop + 1,
+      left: left,
+      width: width,
+      height: math.max(8, laneHeight - 2),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              onTap: () => setState(() => _selectedIndex = index),
+              onPanStart: (_) => _commitUndoState(),
+              onPanUpdate: (details) {
+                setState(() {
+                  _selectedIndex = index;
+                  final deltaTicks = (details.delta.dx / tickScale).round();
+                  final nextStart = _snapTick(
+                    math.max(0, note.startTick + deltaTicks),
+                  );
+                  note.startTick = nextStart;
+                  final pitchDelta = (details.delta.dy / laneHeight).round();
+                  if (pitchDelta != 0) {
+                    note.note = (note.note - pitchDelta).clamp(0, 127);
+                  }
+                });
+              },
+              child: Container(
+                decoration: BoxDecoration(
+                  color: _selectedIndex == index
+                      ? const Color(0xFFF39C12)
+                      : const Color(0xFF57C86A),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  _midiToLabel(note.note),
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.black,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 10,
+            child: GestureDetector(
+              onHorizontalDragStart: (_) => _commitUndoState(),
+              onHorizontalDragUpdate: (details) {
+                setState(() {
+                  _selectedIndex = index;
+                  final endTick = note.startTick + note.durationTicks;
+                  final deltaTicks = (details.delta.dx / tickScale).round();
+                  var newStart = _snapTick(math.max(0, note.startTick + deltaTicks));
+                  if (endTick - newStart < grid) {
+                    newStart = endTick - grid;
+                  }
+                  note.durationTicks = math.max(grid, endTick - newStart);
+                  note.startTick = math.max(0, newStart);
+                });
+              },
+              child: Container(color: const Color(0x33FFFFFF)),
+            ),
+          ),
+          Positioned(
+            right: 0,
+            top: 0,
+            bottom: 0,
+            width: 10,
+            child: GestureDetector(
+              onHorizontalDragStart: (_) => _commitUndoState(),
+              onHorizontalDragUpdate: (details) {
+                setState(() {
+                  _selectedIndex = index;
+                  final deltaTicks = (details.delta.dx / tickScale).round();
+                  final newDur = _snapTick(
+                    math.max(grid, note.durationTicks + deltaTicks),
+                  );
+                  note.durationTicks = math.max(grid, newDur);
+                });
+              },
+              child: Container(color: const Color(0x33FFFFFF)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  bool _isBlackKey(int midiNote) {
+    final pc = midiNote % 12;
+    return pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10;
+  }
+
+  String _midiToLabel(int midiNote) {
+    const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    return '${names[midiNote % 12]}${(midiNote ~/ 12) - 1}';
+  }
+}
+
+class UndoIntent extends Intent {
+  const UndoIntent();
+}
+
+class RedoIntent extends Intent {
+  const RedoIntent();
+}
+
+class EditableMidiNote {
+  EditableMidiNote({
+    required this.note,
+    required this.startTick,
+    required this.durationTicks,
+    required this.velocity,
+  });
+
+  factory EditableMidiNote.copy(EditableMidiNote n) => EditableMidiNote(
+        note: n.note,
+        startTick: n.startTick,
+        durationTicks: n.durationTicks,
+        velocity: n.velocity,
+      );
+
+  int note;
+  int startTick;
+  int durationTicks;
+  int velocity;
+}
+
+class ParsedMidi {
+  ParsedMidi({
+    required this.ticksPerQuarter,
+    required this.tempoBpm,
+    required this.notes,
+  });
+
+  final int ticksPerQuarter;
+  final int tempoBpm;
+  final List<EditableMidiNote> notes;
+
+  static ParsedMidi? tryParse(Uint8List bytes) {
+    if (bytes.length < 14 || String.fromCharCodes(bytes.sublist(0, 4)) != 'MThd') {
+      return null;
+    }
+    final headerLength = _readUint32BE(bytes, 4);
+    if (headerLength < 6 || bytes.length < 8 + headerLength) return null;
+    final ticksPerQuarter = (bytes[12] << 8) | bytes[13];
+    var tempoBpm = 120;
+    final notes = <EditableMidiNote>[];
+
+    var chunkOffset = 8 + headerLength;
+    while (chunkOffset + 8 <= bytes.length) {
+      final chunkType = String.fromCharCodes(bytes.sublist(chunkOffset, chunkOffset + 4));
+      final chunkLength = _readUint32BE(bytes, chunkOffset + 4);
+      final chunkDataStart = chunkOffset + 8;
+      final chunkDataEnd = chunkDataStart + chunkLength;
+      if (chunkDataEnd > bytes.length) break;
+
+      if (chunkType == 'MTrk') {
+        var idx = chunkDataStart;
+        var tick = 0;
+        var runningStatus = 0;
+        final active = <int, int>{};
+
+        while (idx < chunkDataEnd) {
+          final delta = _readVarLen(bytes, idx);
+          idx = delta.next;
+          tick += delta.value;
+          if (idx >= chunkDataEnd) break;
+
+          var status = bytes[idx];
+          if (status < 0x80) {
+            if (runningStatus == 0) {
+              break;
+            }
+            status = runningStatus;
+          } else {
+            idx++;
+            runningStatus = status;
+          }
+
+          if (status == 0xFF) {
+            if (idx + 1 > chunkDataEnd) break;
+            final metaType = bytes[idx++];
+            final len = _readVarLen(bytes, idx);
+            idx = len.next;
+            if (metaType == 0x51 && len.value == 3 && idx + 2 < chunkDataEnd) {
+              final mpq = (bytes[idx] << 16) | (bytes[idx + 1] << 8) | bytes[idx + 2];
+              if (mpq > 0) tempoBpm = (60000000 / mpq).round();
+            }
+            idx += len.value;
+            continue;
+          }
+
+          if (status == 0xF0 || status == 0xF7) {
+            final len = _readVarLen(bytes, idx);
+            idx = len.next + len.value;
+            continue;
+          }
+
+          final eventType = status & 0xF0;
+          if (eventType == 0x90 || eventType == 0x80) {
+            if (idx + 1 >= chunkDataEnd) break;
+            final note = bytes[idx++];
+            final velocity = bytes[idx++];
+            final isOn = eventType == 0x90 && velocity > 0;
+            if (isOn) {
+              active[note] = tick;
+            } else {
+              final start = active.remove(note);
+              if (start != null && tick > start) {
+                notes.add(
+                  EditableMidiNote(
+                    note: note,
+                    startTick: start,
+                    durationTicks: tick - start,
+                    velocity: math.max(1, velocity),
+                  ),
+                );
+              }
+            }
+            continue;
+          }
+
+          if (eventType == 0xC0 || eventType == 0xD0) {
+            idx += 1;
+          } else {
+            idx += 2;
+          }
+        }
+      }
+      chunkOffset = chunkDataEnd;
+    }
+
+    if (notes.isEmpty) return null;
+    notes.sort((a, b) => a.startTick.compareTo(b.startTick));
+    return ParsedMidi(
+      ticksPerQuarter: ticksPerQuarter > 0 ? ticksPerQuarter : 480,
+      tempoBpm: tempoBpm,
+      notes: notes,
+    );
+  }
+
+  Uint8List rebuild(List<EditableMidiNote> edited) {
+    final track = <int>[];
+    final mpq = (60000000 / math.max(1, tempoBpm)).round();
+    track.addAll([
+      0x00, 0xFF, 0x51, 0x03, (mpq >> 16) & 0xFF, (mpq >> 8) & 0xFF, mpq & 0xFF,
+      0x00, 0xFF, 0x58, 0x04, 0x04, 0x02, 0x18, 0x08,
+      0x00, 0xC0, 0x00,
+    ]);
+
+    final events = <_MidiEditEvent>[];
+    for (final n in edited) {
+      final start = math.max(0, n.startTick).toInt();
+      final end = start + math.max(1, n.durationTicks).toInt();
+      events.add(_MidiEditEvent(start, true, n.note, n.velocity.clamp(1, 127)));
+      events.add(_MidiEditEvent(end, false, n.note, 0));
+    }
+    events.sort((a, b) {
+      final t = a.tick.compareTo(b.tick);
+      if (t != 0) return t;
+      if (a.on == b.on) return 0;
+      return a.on ? 1 : -1;
+    });
+
+    var prevTick = 0;
+    for (final e in events) {
+      track.addAll(_writeVarLen(math.max(0, e.tick - prevTick)));
+      track.add(e.on ? 0x90 : 0x80);
+      track.add(e.note.clamp(0, 127));
+      track.add(e.velocity.clamp(0, 127));
+      prevTick = e.tick;
+    }
+    track.addAll([0x00, 0xFF, 0x2F, 0x00]);
+
+    return Uint8List.fromList([
+      0x4D, 0x54, 0x68, 0x64,
+      0x00, 0x00, 0x00, 0x06,
+      0x00, 0x00,
+      0x00, 0x01,
+      (ticksPerQuarter >> 8) & 0xFF, ticksPerQuarter & 0xFF,
+      0x4D, 0x54, 0x72, 0x6B,
+      (track.length >> 24) & 0xFF,
+      (track.length >> 16) & 0xFF,
+      (track.length >> 8) & 0xFF,
+      track.length & 0xFF,
+      ...track,
+    ]);
+  }
+
+  static _VarResult _readVarLen(Uint8List bytes, int start) {
+    var idx = start;
+    var value = 0;
+    int b;
+    do {
+      if (idx >= bytes.length) break;
+      b = bytes[idx++];
+      value = (value << 7) | (b & 0x7F);
+    } while ((b & 0x80) != 0);
+    return _VarResult(value, idx);
+  }
+
+  static List<int> _writeVarLen(int value) {
+    var buffer = value & 0x7F;
+    while ((value >>= 7) > 0) {
+      buffer <<= 8;
+      buffer |= ((value & 0x7F) | 0x80);
+    }
+    final out = <int>[];
+    while (true) {
+      out.add(buffer & 0xFF);
+      if ((buffer & 0x80) != 0) {
+        buffer >>= 8;
+      } else {
+        break;
+      }
+    }
+    return out;
+  }
+
+  static int _readUint32BE(Uint8List bytes, int offset) {
+    return (bytes[offset] << 24) |
+        (bytes[offset + 1] << 16) |
+        (bytes[offset + 2] << 8) |
+        bytes[offset + 3];
+  }
+}
+
+class _VarResult {
+  const _VarResult(this.value, this.next);
+  final int value;
+  final int next;
+}
+
+class _MidiEditEvent {
+  const _MidiEditEvent(this.tick, this.on, this.note, this.velocity);
+  final int tick;
+  final bool on;
+  final int note;
+  final int velocity;
 }
 
 
