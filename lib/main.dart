@@ -190,6 +190,7 @@ class _AuthScreenState extends State<AuthScreen> {
       ),
     );
   }
+
 }
 
 // --- GŁÓWNY EKRAN APLIKACJI ---
@@ -216,6 +217,10 @@ class _MyHomePageState extends State<MyHomePage> {
   int _nextLocalSketchId = -1;
   int? _playingSketchId;
   bool isRecording = false;
+  bool _isSavingRecording = false;
+  DateTime? _recordingStartedAt;
+  Duration _recordingElapsed = Duration.zero;
+  Timer? _recordingTicker;
   final TextEditingController _timeSigTopController = TextEditingController(
     text: '4',
   );
@@ -338,6 +343,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> startRecording() async {
     try {
+      if (_isSavingRecording) return;
       if (_playingSketchId != null) {
         await audioPlayer.stop();
         _clearPlayingSketch();
@@ -355,7 +361,18 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
           path: path,
         );
-        setState(() => isRecording = true);
+        setState(() {
+          isRecording = true;
+          _recordingStartedAt = DateTime.now();
+          _recordingElapsed = Duration.zero;
+        });
+        _recordingTicker?.cancel();
+        _recordingTicker = Timer.periodic(const Duration(milliseconds: 200), (_) {
+          if (!mounted || !isRecording || _recordingStartedAt == null) return;
+          setState(() {
+            _recordingElapsed = DateTime.now().difference(_recordingStartedAt!);
+          });
+        });
       }
     } catch (e) {
       debugPrint("Błąd nagrywania: $e");
@@ -366,7 +383,13 @@ class _MyHomePageState extends State<MyHomePage> {
     int? localId;
     try {
       final path = await audioRecorder.stop();
-      setState(() => isRecording = false);
+      _recordingTicker?.cancel();
+      setState(() {
+        isRecording = false;
+        _recordingStartedAt = null;
+        _recordingElapsed = Duration.zero;
+        _isSavingRecording = path != null;
+      });
 
       if (path != null) {
         final file = File(path);
@@ -414,6 +437,9 @@ class _MyHomePageState extends State<MyHomePage> {
 
         unawaited(getSketches().then((_) => _showSessionSketches()));
       }
+      if (mounted) {
+        setState(() => _isSavingRecording = false);
+      }
     } catch (e) {
       debugPrint("Błąd wysyłki: $e");
       if (localId != null) {
@@ -428,6 +454,9 @@ class _MyHomePageState extends State<MyHomePage> {
           };
           _showSessionSketches();
         }
+      }
+      if (mounted) {
+        setState(() => _isSavingRecording = false);
       }
     }
   }
@@ -717,6 +746,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   @override
   void dispose() {
+    _recordingTicker?.cancel();
     _playbackResetTimer?.cancel();
     _playerCompleteSubscription?.cancel();
     _playerStateSubscription?.cancel();
@@ -764,7 +794,9 @@ class _MyHomePageState extends State<MyHomePage> {
                 borderRadius: BorderRadius.circular(8),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(8),
-                  onTap: isRecording ? stopRecording : startRecording,
+                  onTap: _isSavingRecording
+                      ? null
+                      : (isRecording ? stopRecording : startRecording),
                   child: Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(18),
@@ -787,7 +819,9 @@ class _MyHomePageState extends State<MyHomePage> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          isRecording
+                          _isSavingRecording
+                              ? "Saving clip..."
+                              : isRecording
                               ? "Tap to stop and save"
                               : "Record a melody",
                           style: const TextStyle(
@@ -797,11 +831,28 @@ class _MyHomePageState extends State<MyHomePage> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          isRecording
+                          _isSavingRecording
+                              ? "Uploading recording to Supabase"
+                              : isRecording
                               ? "Saving as a 44.1 kHz WAV clip"
                               : "Hum or sing a short phrase",
                           style: TextStyle(color: colorScheme.onSurfaceVariant),
                         ),
+                        if (isRecording) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            _formatDuration(_recordingElapsed),
+                            style: TextStyle(
+                              color: colorScheme.primary,
+                              fontWeight: FontWeight.w800,
+                              fontFeatures: const [FontFeature.tabularFigures()],
+                            ),
+                          ),
+                        ],
+                        if (_isSavingRecording) ...[
+                          const SizedBox(height: 10),
+                          const LinearProgressIndicator(minHeight: 3),
+                        ],
                       ],
                     ),
                   ),
@@ -1013,6 +1064,13 @@ class _MyHomePageState extends State<MyHomePage> {
       ),
     );
   }
+
+  String _formatDuration(Duration d) {
+    final totalSeconds = d.inSeconds;
+    final minutes = (totalSeconds ~/ 60).toString().padLeft(2, '0');
+    final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
 }
 
 class MidiEditorDialog extends StatefulWidget {
@@ -1029,6 +1087,7 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
   int _selectedIndex = -1;
   int _gridDivider = 8;
   static const int _beatsPerBar = 4;
+  final bool _showConfidenceHeatmap = false;
   final List<List<EditableMidiNote>> _undoStack = [];
   final List<List<EditableMidiNote>> _redoStack = [];
 
@@ -1237,6 +1296,7 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
                                       maxNote: maxNote,
                                       laneHeight: laneHeight,
                                       tickScale: tickScale,
+                                      showConfidenceHeatmap: _showConfidenceHeatmap,
                                     ),
                                 ],
                               );
@@ -1315,12 +1375,19 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     required int maxNote,
     required double laneHeight,
     required double tickScale,
+    required bool showConfidenceHeatmap,
   }) {
     final top = (maxNote - note.note);
     final rectTop = (math.max(0, top.toDouble())) * laneHeight;
     final left = note.startTick * tickScale;
     final width = math.max(6.0, note.durationTicks * tickScale);
     final grid = _gridTick();
+    final confidence = _confidenceFromVelocity(note.velocity);
+    final noteColor = showConfidenceHeatmap
+        ? _confidenceColor(confidence, selected: _selectedIndex == index)
+        : (_selectedIndex == index
+              ? const Color(0xFFF39C12)
+              : const Color(0xFF57C86A));
     return Positioned(
       top: rectTop + 1,
       left: left,
@@ -1348,9 +1415,7 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
               },
               child: Container(
                 decoration: BoxDecoration(
-                  color: _selectedIndex == index
-                      ? const Color(0xFFF39C12)
-                      : const Color(0xFF57C86A),
+                  color: noteColor,
                   borderRadius: BorderRadius.circular(4),
                 ),
                 alignment: Alignment.center,
@@ -1421,6 +1486,29 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
   String _midiToLabel(int midiNote) {
     const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
     return '${names[midiNote % 12]}${(midiNote ~/ 12) - 1}';
+  }
+
+  double _confidenceFromVelocity(int velocity) {
+    return (velocity.clamp(1, 127) - 1) / 126.0;
+  }
+
+  Color _confidenceColor(double confidence, {required bool selected}) {
+    if (selected) return const Color(0xFFF39C12);
+    final clamped = confidence.clamp(0.0, 1.0);
+    if (clamped <= 0.5) {
+      return Color.lerp(
+            const Color(0xFFE65A5A),
+            const Color(0xFFF4C04A),
+            clamped / 0.5,
+          ) ??
+          const Color(0xFFE65A5A);
+    }
+    return Color.lerp(
+          const Color(0xFFF4C04A),
+          const Color(0xFF57C86A),
+          (clamped - 0.5) / 0.5,
+        ) ??
+        const Color(0xFF57C86A);
   }
 }
 
@@ -1666,6 +1754,3 @@ class _MidiEditEvent {
   final int note;
   final int velocity;
 }
-
-
-
