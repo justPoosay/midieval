@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:pitch_detector_dart/pitch_detector.dart';
 import 'package:wav/wav.dart';
 
 class MidiEngine {
@@ -21,6 +22,8 @@ class MidiEngine {
   static const int _ticksPerBar = _ticksPerQuarter * _beatsPerMeasure;
   static const int _quantizeTicks = _ticksPerQuarter ~/ 4;
   static const double _maxSteadyRhythmDeviation = 0.42;
+  static const double _minLeadingVoicedSeconds = 0.10;
+  static const int _maxOctaveCorrectionSemitones = 8;
   static const List<int> _steadyRhythmNoteTicks = [
     _ticksPerQuarter ~/ 4,
     _ticksPerQuarter ~/ 2,
@@ -62,6 +65,11 @@ class MidiEngine {
     180,
   ];
   static _RhythmLanguageModel? _rhythmLanguageModel;
+  static _PitchBackend _pitchBackend = _PitchBackend.robust;
+
+  static void configurePitchBackend({required bool robust}) {
+    _pitchBackend = robust ? _PitchBackend.robust : _PitchBackend.classic;
+  }
 
   static void configureRhythmLanguageModel(Uint8List jsonBytes) {
     final decoded = jsonDecode(utf8.decode(jsonBytes));
@@ -100,13 +108,13 @@ class MidiEngine {
     return Wav([samples], sampleRate).write();
   }
 
-  static Uint8List generateMidiFromAudio(
+  static Future<Uint8List> generateMidiFromAudio(
     Uint8List audioBytes, {
     int? tempoBpm,
-  }) {
+  }) async {
     final audio = _decodeWav(audioBytes);
     final samples = _prepareSignal(audio.samples);
-    final notes = _detectNotes(samples, audio.sampleRate);
+    final notes = await _detectNotes(samples, audio.sampleRate);
 
     if (notes.isEmpty) {
       throw const FormatException(
@@ -161,7 +169,20 @@ class MidiEngine {
     return output;
   }
 
-  static List<_DetectedNote> _detectNotes(Float64List samples, int sampleRate) {
+  static Future<List<_DetectedNote>> _detectNotes(
+    Float64List samples,
+    int sampleRate,
+  ) async {
+    if (_pitchBackend == _PitchBackend.classic) {
+      return _detectNotesClassic(samples, sampleRate);
+    }
+    return _detectNotesRobust(samples, sampleRate);
+  }
+
+  static List<_DetectedNote> _detectNotesClassic(
+    Float64List samples,
+    int sampleRate,
+  ) {
     if (samples.length < 1024) return const [];
 
     final frameSize = math.min(
@@ -192,7 +213,12 @@ class MidiEngine {
       final note = _frequencyToMidi(pitch.frequency);
       if (note < 24 || note > 108) continue;
 
-      rawFrames[frame] = _PitchFrame(note, pitch.confidence, rms);
+      rawFrames[frame] = _PitchFrame(
+        note,
+        pitch.confidence,
+        rms,
+        pitch.frequency,
+      );
     }
 
     final smoothedFrames = _smoothFrames(rawFrames);
@@ -205,7 +231,113 @@ class MidiEngine {
     );
   }
 
-  static List<_PitchFrame?> _smoothFrames(List<_PitchFrame?> frames) {
+  static Future<List<_DetectedNote>> _detectNotesRobust(
+    Float64List samples,
+    int sampleRate,
+  ) async {
+    if (samples.length < 1024) return const [];
+
+    final frameSize = math.min(
+      4096,
+      math.max(2048, _nextPowerOfTwo(sampleRate ~/ 12)),
+    );
+    final hopSize = frameSize ~/ 4;
+    final frameCount = 1 + ((samples.length - frameSize) ~/ hopSize);
+    if (frameCount <= 0) return const [];
+
+    final rmsValues = List<double>.filled(frameCount, 0);
+    for (var frame = 0; frame < frameCount; frame++) {
+      rmsValues[frame] = _rms(samples, frame * hopSize, frameSize);
+    }
+
+    final strongestRms = _percentile(rmsValues, 0.90);
+    final silenceGate = math.max(0.020, strongestRms * 0.25);
+    final rawFrames = List<_PitchFrame?>.filled(frameCount, null);
+    final detector = PitchDetector(
+      audioSampleRate: sampleRate.toDouble(),
+      bufferSize: frameSize,
+    );
+
+    for (var frame = 0; frame < frameCount; frame++) {
+      final rms = rmsValues[frame];
+      if (rms < silenceGate) continue;
+
+      final start = frame * hopSize;
+      final pitch = await _estimatePitchFromGithubDetector(
+        detector,
+        samples,
+        start,
+        frameSize,
+        sampleRate,
+      );
+      if (pitch == null || pitch.confidence < 0.74) continue;
+
+      final note = _frequencyToMidi(pitch.frequency);
+      if (note < 24 || note > 108) continue;
+
+      rawFrames[frame] = _PitchFrame(
+        note,
+        pitch.confidence,
+        rms,
+        pitch.frequency,
+      );
+    }
+
+    final onsetFrames = math.max(
+      1,
+      (_minLeadingVoicedSeconds / (hopSize / sampleRate)).round(),
+    );
+    final gatedFrames = _trimLeadingFalseStarts(rawFrames, onsetFrames);
+    final octaveCorrected = _correctOctaveFrames(gatedFrames);
+    final smoothedFrames = _smoothFrames(
+      octaveCorrected,
+      radius: _smoothingRadius + 1,
+      minVoteRatio: _minSmoothingVoteRatio - 0.04,
+    );
+    return _framesToNotes(
+      smoothedFrames,
+      hopSize: hopSize,
+      frameSize: frameSize,
+      sampleRate: sampleRate,
+      maxRms: math.max(strongestRms, silenceGate),
+    );
+  }
+
+  static Future<_PitchEstimate?> _estimatePitchFromGithubDetector(
+    PitchDetector detector,
+    Float64List samples,
+    int start,
+    int frameSize,
+    int sampleRate,
+  ) async {
+    final frame = List<double>.generate(
+      frameSize,
+      (index) => samples[start + index],
+      growable: false,
+    );
+    try {
+      final result = await detector.getPitchFromFloatBuffer(frame);
+      final pitched = result.pitched == true;
+      final frequency = (result.pitch as num?)?.toDouble();
+      final probability = (result.probability as num?)?.toDouble() ?? 0.0;
+      if (!pitched ||
+          frequency == null ||
+          frequency.isNaN ||
+          frequency < _minPitchHz ||
+          frequency > _maxPitchHz) {
+        return null;
+      }
+      return _PitchEstimate(frequency, probability.clamp(0.0, 1.0));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static List<_PitchFrame?> _smoothFramesInternal(
+    List<_PitchFrame?> frames, {
+    required int radius,
+    required double minVoteRatio,
+  }) {
     final smoothed = List<_PitchFrame?>.filled(frames.length, null);
 
     for (var i = 0; i < frames.length; i++) {
@@ -215,11 +347,12 @@ class MidiEngine {
       final counts = <int, int>{};
       var rms = 0.0;
       var confidence = 0.0;
+      var frequency = 0.0;
       var seen = 0;
 
       for (
-        var j = math.max(0, i - _smoothingRadius);
-        j <= math.min(frames.length - 1, i + _smoothingRadius);
+        var j = math.max(0, i - radius);
+        j <= math.min(frames.length - 1, i + radius);
         j++
       ) {
         final neighbor = frames[j];
@@ -227,6 +360,7 @@ class MidiEngine {
         counts[neighbor.note] = (counts[neighbor.note] ?? 0) + 1;
         rms += neighbor.rms;
         confidence += neighbor.confidence;
+        frequency += neighbor.frequency;
         seen++;
       }
 
@@ -235,14 +369,92 @@ class MidiEngine {
       final noteEntry = counts.entries.reduce(
         (a, b) => a.value >= b.value ? a : b,
       );
-      if (noteEntry.value / seen < _minSmoothingVoteRatio && seen >= 5) {
+      if (noteEntry.value / seen < minVoteRatio && seen >= 5) {
         continue;
       }
 
-      smoothed[i] = _PitchFrame(noteEntry.key, confidence / seen, rms / seen);
+      smoothed[i] = _PitchFrame(
+        noteEntry.key,
+        confidence / seen,
+        rms / seen,
+        frequency / seen,
+      );
     }
 
     return smoothed;
+  }
+
+  static List<_PitchFrame?> _smoothFrames(
+    List<_PitchFrame?> frames, {
+    int? radius,
+    double? minVoteRatio,
+  }) {
+    return _smoothFramesInternal(
+      frames,
+      radius: radius ?? _smoothingRadius,
+      minVoteRatio: minVoteRatio ?? _minSmoothingVoteRatio,
+    );
+  }
+
+  static List<_PitchFrame?> _trimLeadingFalseStarts(
+    List<_PitchFrame?> frames,
+    int onsetFrames,
+  ) {
+    if (frames.isEmpty || onsetFrames <= 1) return frames;
+    for (var i = 0; i <= frames.length - onsetFrames; i++) {
+      var voiced = true;
+      for (var j = i; j < i + onsetFrames; j++) {
+        if (frames[j] == null) {
+          voiced = false;
+          break;
+        }
+      }
+      if (voiced) {
+        if (i == 0) return frames;
+        final trimmed = List<_PitchFrame?>.filled(frames.length, null);
+        for (var j = i; j < frames.length; j++) {
+          trimmed[j] = frames[j];
+        }
+        return trimmed;
+      }
+    }
+    return frames;
+  }
+
+  static List<_PitchFrame?> _correctOctaveFrames(List<_PitchFrame?> frames) {
+    final corrected = List<_PitchFrame?>.from(frames);
+    final noteWindow = <int>[];
+    for (var i = 0; i < frames.length; i++) {
+      final frame = frames[i];
+      if (frame == null) continue;
+      noteWindow.add(frame.note);
+      if (noteWindow.length > 7) {
+        noteWindow.removeAt(0);
+      }
+      if (noteWindow.length < 3) continue;
+      final reference = _medianInt(noteWindow);
+      final diff = frame.note - reference;
+      if (diff.abs() <= _maxOctaveCorrectionSemitones) continue;
+
+      final downDiff = (frame.note - 12 - reference).abs();
+      final upDiff = (frame.note + 12 - reference).abs();
+      final noAdjust = diff.abs();
+      if (downDiff < noAdjust || upDiff < noAdjust) {
+        final adjusted = downDiff <= upDiff ? frame.note - 12 : frame.note + 12;
+        corrected[i] = _PitchFrame(
+          adjusted.clamp(24, 108),
+          frame.confidence,
+          frame.rms,
+          frame.frequency,
+        );
+      }
+    }
+    return corrected;
+  }
+
+  static int _medianInt(List<int> values) {
+    final sorted = values.toList()..sort();
+    return sorted[sorted.length ~/ 2];
   }
 
   static List<_DetectedNote> _framesToNotes(
@@ -1023,6 +1235,8 @@ class _AudioData {
   final int sampleRate;
 }
 
+enum _PitchBackend { classic, robust }
+
 class _PitchEstimate {
   const _PitchEstimate(this.frequency, this.confidence);
 
@@ -1031,11 +1245,12 @@ class _PitchEstimate {
 }
 
 class _PitchFrame {
-  const _PitchFrame(this.note, this.confidence, this.rms);
+  const _PitchFrame(this.note, this.confidence, this.rms, this.frequency);
 
   final int note;
   final double confidence;
   final double rms;
+  final double frequency;
 }
 
 class _DetectedNote {

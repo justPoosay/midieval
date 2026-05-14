@@ -6,19 +6,19 @@ import 'package:midieval/midi_engine.dart';
 import 'package:wav/wav.dart';
 
 void main() {
-  test('converts a 440 Hz WAV tone into MIDI note A4', () {
+  test('converts a 440 Hz WAV tone into MIDI note A4', () async {
     final wavBytes = _sineWav(frequency: 440, seconds: 1.0);
 
-    final midiBytes = MidiEngine.generateMidiFromAudio(wavBytes);
+    final midiBytes = await MidiEngine.generateMidiFromAudio(wavBytes);
 
     expect(String.fromCharCodes(midiBytes.sublist(0, 4)), 'MThd');
     expect(_noteOns(midiBytes), contains(69));
   });
 
-  test('converts the synthetic C5-C6 sine scale into the expected notes', () {
+  test('converts the synthetic C5-C6 sine scale into the expected notes', () async {
     final wavBytes = MidiEngine.generateSineSequenceWav();
 
-    final midiBytes = MidiEngine.generateMidiFromAudio(wavBytes);
+    final midiBytes = await MidiEngine.generateMidiFromAudio(wavBytes);
     final events = _noteOnEvents(midiBytes);
     final noteDurations = _noteDurations(midiBytes);
 
@@ -38,28 +38,28 @@ void main() {
     expect(events.last.tick + noteDurations.last, 3840);
   });
 
-  test('converts a hummed C4-C5 scale without vibrato fragments', () {
+  test('converts a hummed C4-C5 scale without vibrato fragments', () async {
     final wavBytes = _hummedMajorScaleWav();
 
-    final midiBytes = MidiEngine.generateMidiFromAudio(wavBytes);
+    final midiBytes = await MidiEngine.generateMidiFromAudio(wavBytes);
     final events = _noteOnEvents(midiBytes);
 
     expect(events.map((event) => event.note), [60, 62, 64, 65, 67, 69, 71, 72]);
   });
 
-  test('absorbs short chromatic scoops in a hummed C4-C5 scale', () {
+  test('absorbs short chromatic scoops in a hummed C4-C5 scale', () async {
     final wavBytes = _hummedMajorScaleWav(includeScoops: true);
 
-    final midiBytes = MidiEngine.generateMidiFromAudio(wavBytes);
+    final midiBytes = await MidiEngine.generateMidiFromAudio(wavBytes);
     final events = _noteOnEvents(midiBytes);
 
     expect(events.map((event) => event.note), [60, 62, 64, 65, 67, 69, 71, 72]);
   });
 
-  test('bar-aligns an uneven hummed C4-C5 scale across two bars', () {
+  test('bar-aligns an uneven hummed C4-C5 scale across two bars', () async {
     final wavBytes = _hummedMajorScaleWav(unevenTiming: true);
 
-    final midiBytes = MidiEngine.generateMidiFromAudio(wavBytes);
+    final midiBytes = await MidiEngine.generateMidiFromAudio(wavBytes);
     final events = _noteOnEvents(midiBytes);
     final noteDurations = _noteDurations(midiBytes);
 
@@ -78,10 +78,10 @@ void main() {
     expect(events.last.tick + noteDurations.last, 3840);
   });
 
-  test('snaps a steady sung phrase with leaps to quarter-note timing', () {
+  test('snaps a steady sung phrase with leaps to quarter-note timing', () async {
     final wavBytes = _steadySungPhraseWav();
 
-    final midiBytes = MidiEngine.generateMidiFromAudio(wavBytes);
+    final midiBytes = await MidiEngine.generateMidiFromAudio(wavBytes);
     final events = _noteOnEvents(midiBytes);
     final noteDurations = _noteDurations(midiBytes);
 
@@ -90,9 +90,19 @@ void main() {
     expect(noteDurations, everyElement(480));
   });
 
+  test('ignores leading silence before the first sung note', () async {
+    final wavBytes = _hummedMajorScaleWav(withLeadingSilence: true);
+
+    final midiBytes = await MidiEngine.generateMidiFromAudio(wavBytes);
+    final events = _noteOnEvents(midiBytes);
+
+    expect(events.map((event) => event.note), [60, 62, 64, 65, 67, 69, 71, 72]);
+    expect(events.first.tick, 0);
+  });
+
   test(
     'rejects compressed audio bytes instead of guessing from container data',
-    () {
+    () async {
       final fakeM4aBytes = Uint8List.fromList([
         0,
         0,
@@ -104,8 +114,8 @@ void main() {
         112,
       ]);
 
-      expect(
-        () => MidiEngine.generateMidiFromAudio(fakeM4aBytes),
+      await expectLater(
+        MidiEngine.generateMidiFromAudio(fakeM4aBytes),
         throwsA(isA<FormatException>()),
       );
     },
@@ -127,6 +137,7 @@ Uint8List _sineWav({required double frequency, required double seconds}) {
 Uint8List _hummedMajorScaleWav({
   bool includeScoops = false,
   bool unevenTiming = false,
+  bool withLeadingSilence = false,
 }) {
   const sampleRate = 44100;
   const noteSeconds = 0.52;
@@ -140,11 +151,15 @@ Uint8List _hummedMajorScaleWav({
     0,
     (sum, seconds) => sum + (sampleRate * seconds).round(),
   );
+  final leadingSilenceSamples = withLeadingSilence
+      ? (sampleRate * 0.55).round()
+      : 0;
   final samples = Float64List(
+    leadingSilenceSamples +
     totalNoteSamples + (notes.length - 1) * gapSamples,
   );
 
-  var offset = 0;
+  var offset = leadingSilenceSamples;
   double? previousFrequency;
   for (var noteIndex = 0; noteIndex < notes.length; noteIndex++) {
     final note = notes[noteIndex];

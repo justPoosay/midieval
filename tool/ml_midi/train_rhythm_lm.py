@@ -7,8 +7,8 @@ from collections import Counter
 from pathlib import Path
 
 import librosa
+import mido
 import numpy as np
-import pretty_midi
 
 TICKS_PER_QUARTER = 480
 CANDIDATE_TICKS = [120, 240, 360, 480, 720, 960]
@@ -18,28 +18,43 @@ def nearest_tick(value: int) -> int:
     return min(CANDIDATE_TICKS, key=lambda x: abs(x - value))
 
 
-def bpm_from_midi(pm: pretty_midi.PrettyMIDI) -> float:
-    tempo_times, tempo_values = pm.get_tempo_changes()
-    if len(tempo_values) == 0:
-        return 120.0
-    return float(np.median(tempo_values))
+def tempo_from_meta(mid: mido.MidiFile) -> int:
+    # Default MIDI tempo is 500000 microseconds per beat = 120 BPM.
+    tempos = []
+    for track in mid.tracks:
+        for msg in track:
+            if msg.type == "set_tempo":
+                tempos.append(int(msg.tempo))
+    if not tempos:
+        return 500000
+    return int(np.median(np.array(tempos, dtype=np.int64)))
 
 
-def iois_from_midi(pm: pretty_midi.PrettyMIDI) -> list[int]:
-    notes = []
-    for instrument in pm.instruments:
-        if instrument.is_drum:
-            continue
-        notes.extend(instrument.notes)
-    if len(notes) < 2:
+def note_on_ticks_from_midi(mid: mido.MidiFile) -> list[int]:
+    merged = mido.merge_tracks(mid.tracks)
+    absolute_tick = 0
+    note_on_ticks = []
+    for msg in merged:
+        absolute_tick += msg.time
+        if msg.type == "note_on" and msg.velocity > 0:
+            note_on_ticks.append(int(absolute_tick))
+    return note_on_ticks
+
+
+def iois_from_midi(mid: mido.MidiFile) -> list[int]:
+    note_on_ticks = note_on_ticks_from_midi(mid)
+    if len(note_on_ticks) < 2:
         return []
-    notes.sort(key=lambda n: n.start)
-    bpm = bpm_from_midi(pm)
-    beat_seconds = 60.0 / bpm
+
+    midi_ticks_per_beat = mid.ticks_per_beat if mid.ticks_per_beat > 0 else 480
+    tempo_us_per_beat = tempo_from_meta(mid)
+    beat_seconds = tempo_us_per_beat / 1_000_000.0
+    target_beat_seconds = beat_seconds
     iois = []
-    for i in range(1, len(notes)):
-        dt = notes[i].start - notes[i - 1].start
-        ticks = int(round((dt / beat_seconds) * TICKS_PER_QUARTER))
+    for i in range(1, len(note_on_ticks)):
+        dt_ticks = note_on_ticks[i] - note_on_ticks[i - 1]
+        dt_beats = dt_ticks / midi_ticks_per_beat
+        ticks = int(round((dt_beats * target_beat_seconds / beat_seconds) * TICKS_PER_QUARTER))
         if ticks <= 0:
             continue
         iois.append(nearest_tick(ticks))
@@ -63,8 +78,8 @@ def validate_pair(audio_path: Path, midi_path: Path) -> bool:
         voiced_ratio = np.isfinite(f0).mean()
         if voiced_ratio < 0.12:
             return False
-        pm = pretty_midi.PrettyMIDI(str(midi_path))
-        return len(iois_from_midi(pm)) > 0
+        mid = mido.MidiFile(str(midi_path))
+        return len(iois_from_midi(mid)) > 0
     except Exception:
         return False
 
@@ -87,8 +102,8 @@ def build_model(pairs: list[tuple[Path, Path]]) -> dict:
     for audio_path, midi_path in pairs:
         if not validate_pair(audio_path, midi_path):
             continue
-        pm = pretty_midi.PrettyMIDI(str(midi_path))
-        seq = iois_from_midi(pm)
+        mid = mido.MidiFile(str(midi_path))
+        seq = iois_from_midi(mid)
         if not seq:
             continue
         total_sequences += 1

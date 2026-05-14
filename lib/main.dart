@@ -215,6 +215,7 @@ class _MyHomePageState extends State<MyHomePage> {
   int _nextLocalSketchId = -1;
   int? _playingSketchId;
   bool isRecording = false;
+  bool _useRobustPitchBackend = true;
 
   @override
   void initState() {
@@ -233,6 +234,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _loadRhythmModel() async {
+    MidiEngine.configurePitchBackend(robust: _useRobustPitchBackend);
     try {
       final bytes = await rootBundle.load('assets/models/rhythm_lm.json');
       MidiEngine.configureRhythmLanguageModel(bytes.buffer.asUint8List());
@@ -240,6 +242,22 @@ class _MyHomePageState extends State<MyHomePage> {
     } catch (e) {
       debugPrint('Rhythm model not found, fallback quantizer enabled: $e');
     }
+  }
+
+  void _setPitchBackend(bool robust) {
+    MidiEngine.configurePitchBackend(robust: robust);
+    if (!mounted) return;
+    setState(() => _useRobustPitchBackend = robust);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(milliseconds: 900),
+        content: Text(
+          robust
+              ? 'Pitch backend: GitHub detector'
+              : 'Pitch backend: Classic detector',
+        ),
+      ),
+    );
   }
 
   void _clearPlayingSketch() {
@@ -672,7 +690,7 @@ class _MyHomePageState extends State<MyHomePage> {
       }
 
       // 3. Wywołujemy silnik z osobnego pliku (ten, który ma tylko 1 nutę)
-      final midiBytes = MidiEngine.generateMidiFromAudio(audioBytes);
+      final midiBytes = await MidiEngine.generateMidiFromAudio(audioBytes);
 
       // 4. Tworzymy unikalną nazwę, żeby uniknąć starych plików w pamięci
       final String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
@@ -742,6 +760,43 @@ class _MyHomePageState extends State<MyHomePage> {
           style: TextStyle(fontWeight: FontWeight.w800),
         ),
         actions: [
+          PopupMenuButton<bool>(
+            tooltip: "Pitch Backend",
+            onSelected: _setPitchBackend,
+            icon: const Icon(Icons.tune),
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: true,
+                child: Row(
+                  children: [
+                    Icon(
+                      _useRobustPitchBackend
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_unchecked,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    const Text('GitHub detector'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: false,
+                child: Row(
+                  children: [
+                    Icon(
+                      !_useRobustPitchBackend
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_unchecked,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    const Text('Classic detector'),
+                  ],
+                ),
+              ),
+            ],
+          ),
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: () async {
@@ -914,7 +969,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                   : item['title'],
                             ),
                             subtitle: Text(
-                              item['created_at'].toString().substring(0, 10),
+                              '${item['created_at'].toString().substring(0, 10)}   ${_useRobustPitchBackend ? "[GitHub]" : "[Classic]"}',
                             ),
                             trailing: Wrap(
                               spacing: 12, // odstęp między ikonami
@@ -930,7 +985,8 @@ class _MyHomePageState extends State<MyHomePage> {
                                           audioPath,
                                           itemId,
                                         ),
-                                  tooltip: "Konwertuj na MIDI",
+                                  tooltip:
+                                      'Konwertuj na MIDI (${_useRobustPitchBackend ? "GitHub" : "Classic"})',
                                 ),
                                 IconButton(
                                   icon: Icon(
