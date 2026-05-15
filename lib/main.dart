@@ -806,6 +806,7 @@ class _MyHomePageState extends State<MyHomePage> {
   int? _playingSketchId;
   int? _loadingSketchId;
   final Map<String, String> _playbackCacheByUrl = {};
+  final Map<int, String> _cachedAudioPathBySketchId = {};
   final Map<int, _ConversionDiagnostics> _conversionDiagnostics = {};
   bool isRecording = false;
   bool _isSavingRecording = false;
@@ -1004,7 +1005,13 @@ class _MyHomePageState extends State<MyHomePage> {
       (item) => item['id'] == previousId,
     );
     if (index >= 0) {
-      _sessionSketches[index] = replacement;
+      final existing = _sessionSketches[index];
+      final localPath = existing['_local_audio_path']?.toString();
+      final merged = <String, dynamic>{...replacement};
+      if (localPath != null) {
+        merged['_local_audio_path'] = localPath;
+      }
+      _sessionSketches[index] = merged;
     } else {
       _sessionSketches.insert(0, replacement);
     }
@@ -1013,6 +1020,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   void _removeSessionSketch(int id) {
     _sessionSketches.removeWhere((item) => item['id'] == id);
+    _cachedAudioPathBySketchId.remove(id);
     _showSessionSketches();
   }
 
@@ -1085,7 +1093,9 @@ class _MyHomePageState extends State<MyHomePage> {
           'audio_path': path,
           'created_at': createdAt.toIso8601String(),
           '_is_uploading': true,
+          '_local_audio_path': path,
         };
+        _cachedAudioPathBySketchId[localId] = path;
 
         _upsertSessionSketch(localSketch);
 
@@ -1115,6 +1125,9 @@ class _MyHomePageState extends State<MyHomePage> {
             .select()
             .single();
         final remoteSketch = Map<String, dynamic>.from(inserted);
+        _cachedAudioPathBySketchId.remove(localId);
+        _cachedAudioPathBySketchId[remoteSketch['id'] as int] = path;
+        _playbackCacheByUrl[publicUrl] = path;
         _replaceSessionSketch(localId, remoteSketch);
 
         unawaited(getSketches().then((_) => _showSessionSketches()));
@@ -1150,6 +1163,13 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     if (id < 0) {
+      final cachedLocal = _cachedAudioPathBySketchId.remove(id);
+      if (cachedLocal != null) {
+        final cachedFile = File(cachedLocal);
+        if (await cachedFile.exists()) {
+          await cachedFile.delete();
+        }
+      }
       _removeSessionSketch(id);
       final localFile = File(filePath);
       if (await localFile.exists()) {
@@ -1163,6 +1183,14 @@ class _MyHomePageState extends State<MyHomePage> {
     await Supabase.instance.client.storage.from('audio-samples').remove([
       fileName,
     ]);
+    final cached = _cachedAudioPathBySketchId.remove(id);
+    if (cached != null) {
+      final cachedFile = File(cached);
+      if (await cachedFile.exists()) {
+        await cachedFile.delete();
+      }
+    }
+    _playbackCacheByUrl.remove(filePath);
     _removeSessionSketch(id);
     _refreshSketches();
   }
@@ -1190,6 +1218,53 @@ class _MyHomePageState extends State<MyHomePage> {
     return localPath;
   }
 
+  Future<String> _resolveLocalAudioPath(int sketchId, String audioUrl) async {
+    final cachedBySketch = _cachedAudioPathBySketchId[sketchId];
+    if (cachedBySketch != null && await File(cachedBySketch).exists()) {
+      return cachedBySketch;
+    }
+
+    if (!audioUrl.startsWith('http://') && !audioUrl.startsWith('https://')) {
+      if (await File(audioUrl).exists()) {
+        _cachedAudioPathBySketchId[sketchId] = audioUrl;
+        return audioUrl;
+      }
+    }
+
+    String? sessionLocalPath;
+    for (final item in _sessionSketches) {
+      if (item['id'] == sketchId) {
+        sessionLocalPath = item['_local_audio_path']?.toString();
+        break;
+      }
+    }
+    if (sessionLocalPath != null && await File(sessionLocalPath).exists()) {
+      _cachedAudioPathBySketchId[sketchId] = sessionLocalPath;
+      return sessionLocalPath;
+    }
+
+    final localPath = await _localPlaybackPathForUrl(audioUrl);
+    _cachedAudioPathBySketchId[sketchId] = localPath;
+    return localPath;
+  }
+
+  void _clearLocalAudioCache() {
+    final paths = <String>{
+      ..._playbackCacheByUrl.values,
+      ..._cachedAudioPathBySketchId.values,
+    };
+    for (final path in paths) {
+      final f = File(path);
+      if (f.existsSync()) {
+        try {
+          f.deleteSync();
+        } catch (_) {}
+      }
+    }
+    _playbackCacheByUrl.clear();
+    _cachedAudioPathBySketchId.clear();
+  }
+
   Future<void> playOrStopSketch(int sketchId, String audioUrl) async {
     try {
       if (_playingSketchId == sketchId) {
@@ -1205,7 +1280,7 @@ class _MyHomePageState extends State<MyHomePage> {
         });
       }
       _playbackResetTimer?.cancel();
-      final sourcePath = await _localPlaybackPathForUrl(audioUrl);
+      final sourcePath = await _resolveLocalAudioPath(sketchId, audioUrl);
       final localFile = File(sourcePath);
       final isLocalFile = await localFile.exists();
       final playbackDuration = isLocalFile
@@ -1611,17 +1686,15 @@ class _MyHomePageState extends State<MyHomePage> {
         request.sketchId,
         const _ConversionJobState(
           status: _ConversionStatus.running,
-          message: 'Downloading audio...',
+          message: 'Preparing audio...',
           progress: 0.10,
         ),
       );
-      final localAudioFile = File(request.audioUrl);
-      final Uint8List audioBytes;
-      if (await localAudioFile.exists()) {
-        audioBytes = await localAudioFile.readAsBytes();
-      } else {
-        audioBytes = await _downloadAudioBytes(request.audioUrl);
-      }
+      final sourcePath = await _resolveLocalAudioPath(
+        request.sketchId,
+        request.audioUrl,
+      );
+      final audioBytes = await File(sourcePath).readAsBytes();
 
       _setJobState(
         request.sketchId,
@@ -2278,14 +2351,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _timeSigTopController.dispose();
     _timeSigBottomController.dispose();
     _tempoController.dispose();
-    for (final path in _playbackCacheByUrl.values) {
-      final f = File(path);
-      if (f.existsSync()) {
-        try {
-          f.deleteSync();
-        } catch (_) {}
-      }
-    }
+    _clearLocalAudioCache();
     audioRecorder.dispose();
     audioPlayer.dispose();
     super.dispose();
@@ -2324,6 +2390,7 @@ class _MyHomePageState extends State<MyHomePage> {
             tooltip: context.tr('logout'),
             icon: const Icon(Icons.logout),
             onPressed: () async {
+              _clearLocalAudioCache();
               await Supabase.instance.client.auth.signOut();
               if (!context.mounted) return;
               Navigator.pushReplacement(
