@@ -855,6 +855,90 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _runConversionJob(_ConversionRequest request) async {
     try {
+      if (_isMidiSource(request.audioUrl)) {
+        _setJobState(
+          request.sketchId,
+          const _ConversionJobState(
+            status: _ConversionStatus.running,
+            message: 'Editing existing MIDI...',
+            progress: 0.40,
+          ),
+        );
+        final midiBytes = await _downloadOrReadBytes(request.audioUrl);
+        final editedMidiBytes = await _openMidiEditor(
+          midiBytes,
+          tempoOverrideBpm: _lockTempo ? _parseTempoBpm() : null,
+          meterOverride: _lockMeter ? (_parseMeter()) : null,
+          keyScaleConstraint: _constrainToScale
+              ? KeyScaleConstraint(
+                  tonic: _keyNameToPitchClass(_selectedKey),
+                  isMinor: _selectedScale == 'Minor',
+                )
+              : null,
+        );
+        if (editedMidiBytes == null) {
+          _setJobState(
+            request.sketchId,
+            const _ConversionJobState(
+              status: _ConversionStatus.failed,
+              message: 'Canceled in preview',
+              progress: 1.0,
+            ),
+          );
+          await Future<void>.delayed(const Duration(milliseconds: 900));
+          if (mounted) {
+            setState(() => _conversionJobs.remove(request.sketchId));
+          }
+          return;
+        }
+
+        _setJobState(
+          request.sketchId,
+          const _ConversionJobState(
+            status: _ConversionStatus.running,
+            message: 'Uploading edited MIDI...',
+            progress: 0.82,
+          ),
+        );
+        final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
+        final midiFileName = "melody_${request.sketchId}_$timestamp.midi";
+        await Supabase.instance.client.storage
+            .from('audio-samples')
+            .uploadBinary(
+              midiFileName,
+              editedMidiBytes,
+              fileOptions: const FileOptions(contentType: 'audio/midi', upsert: true),
+            );
+        final midiUrl = Supabase.instance.client.storage
+            .from('audio-samples')
+            .getPublicUrl(midiFileName);
+        await Supabase.instance.client
+            .from('sketches')
+            .update({
+              'title':
+                  '🎵 MIDI: ${DateTime.now().hour}:${DateTime.now().minute}:${DateTime.now().second}',
+              'audio_path': midiUrl,
+            })
+            .match({'id': request.sketchId});
+
+        _setJobState(
+          request.sketchId,
+          const _ConversionJobState(
+            status: _ConversionStatus.done,
+            message: 'MIDI updated',
+            progress: 1.0,
+          ),
+        );
+        if (mounted) {
+          _refreshSketches();
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 900));
+        if (mounted) {
+          setState(() => _conversionJobs.remove(request.sketchId));
+        }
+        return;
+      }
+
       _setJobState(
         request.sketchId,
         const _ConversionJobState(
@@ -973,6 +1057,23 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  bool _isMidiSource(String pathOrUrl) {
+    final value = pathOrUrl.toLowerCase();
+    return value.endsWith('.mid') || value.endsWith('.midi');
+  }
+
+  Future<Uint8List> _downloadOrReadBytes(String pathOrUrl) async {
+    final localFile = File(pathOrUrl);
+    if (await localFile.exists()) {
+      return localFile.readAsBytes();
+    }
+    final response = await http.get(Uri.parse(pathOrUrl));
+    if (response.statusCode != 200) {
+      throw Exception('Could not fetch file (${response.statusCode})');
+    }
+    return response.bodyBytes;
+  }
+
   Uint8List _postProcessGeneratedMidi(Uint8List midiBytes) {
     final parsed = ParsedMidi.tryParse(midiBytes);
     if (parsed == null || parsed.notes.isEmpty) return midiBytes;
@@ -1021,6 +1122,7 @@ class _MyHomePageState extends State<MyHomePage> {
     if (!mounted) return;
     setState(() => _conversionJobs[sketchId] = state);
   }
+
 
   Future<Uint8List?> _openMidiEditor(
     Uint8List midiBytes, {
