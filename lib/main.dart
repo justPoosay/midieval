@@ -671,6 +671,72 @@ class _ConversionJobState {
   final double progress;
 }
 
+class _JumpingNotesOverlay extends StatelessWidget {
+  const _JumpingNotesOverlay({super.key});
+
+  static const _particles =
+      <(double x, double delay, double size, String note, Color color)>[
+        (0.12, 0.00, 30, '♪', Color(0xFF6EE7FF)),
+        (0.22, 0.10, 38, '♫', Color(0xFFC084FC)),
+        (0.31, 0.18, 34, '♬', Color(0xFFFFD166)),
+        (0.43, 0.06, 28, '♩', Color(0xFF6EE7FF)),
+        (0.56, 0.14, 42, '♪', Color(0xFFC084FC)),
+        (0.66, 0.02, 30, '♫', Color(0xFFFFD166)),
+        (0.78, 0.20, 36, '♬', Color(0xFF6EE7FF)),
+        (0.88, 0.08, 32, '♩', Color(0xFFC084FC)),
+      ];
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 1450),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, _) {
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            final height = constraints.maxHeight;
+
+            return Stack(
+              children: _particles.map((p) {
+                final progress = ((value - p.$2) / (1 - p.$2)).clamp(0.0, 1.0);
+                final y = height * (0.82 - (progress * 0.62));
+                final sway = math.sin((progress * math.pi * 2) + p.$1 * 3) * 12;
+                final alpha = (1 - progress).clamp(0.0, 1.0);
+                return Positioned(
+                  left: (width * p.$1) + sway,
+                  top: y,
+                  child: Opacity(
+                    opacity: alpha,
+                    child: Transform.scale(
+                      scale: 0.8 + (progress * 0.45),
+                      child: Text(
+                        p.$4,
+                        style: TextStyle(
+                          fontSize: p.$3,
+                          fontWeight: FontWeight.w800,
+                          color: p.$5,
+                          shadows: [
+                            Shadow(
+                              color: p.$5.withValues(alpha: 0.65),
+                              blurRadius: 16,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
 class _MyHomePageState extends State<MyHomePage> {
   static const int _recordingSampleRate = 44100;
   static const String _basicPitchBridgeHostDesktop = '127.0.0.1';
@@ -708,6 +774,9 @@ class _MyHomePageState extends State<MyHomePage> {
   String _selectedKey = 'C';
   String _selectedScale = 'Major';
   bool _isGeneratingMidiPreview = false;
+  bool _showJumpingNotes = false;
+  int _jumpingNotesSeed = 0;
+  Timer? _jumpingNotesTimer;
   final Queue<_ConversionRequest> _conversionQueue =
       Queue<_ConversionRequest>();
   final Map<int, _ConversionJobState> _conversionJobs = {};
@@ -744,6 +813,19 @@ class _MyHomePageState extends State<MyHomePage> {
         _loadingSketchId = null;
       });
     }
+  }
+
+  void _triggerJumpingNotes() {
+    _jumpingNotesTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _jumpingNotesSeed++;
+      _showJumpingNotes = true;
+    });
+    _jumpingNotesTimer = Timer(const Duration(milliseconds: 1700), () {
+      if (!mounted) return;
+      setState(() => _showJumpingNotes = false);
+    });
   }
 
   Future<void> _configureAudioPlayer({
@@ -1389,6 +1471,7 @@ class _MyHomePageState extends State<MyHomePage> {
             progress: 1.0,
           ),
         );
+        _triggerJumpingNotes();
         if (mounted) {
           _refreshSketches();
         }
@@ -1500,6 +1583,7 @@ class _MyHomePageState extends State<MyHomePage> {
           progress: 1.0,
         ),
       );
+      _triggerJumpingNotes();
       if (mounted) {
         _sessionSketches.removeWhere((item) => item['id'] == request.sketchId);
         _refreshSketches();
@@ -1626,6 +1710,7 @@ class _MyHomePageState extends State<MyHomePage> {
   void dispose() {
     _recordingTicker?.cancel();
     _playbackResetTimer?.cancel();
+    _jumpingNotesTimer?.cancel();
     _playerCompleteSubscription?.cancel();
     _playerStateSubscription?.cancel();
     _timeSigTopController.dispose();
@@ -2066,6 +2151,14 @@ class _MyHomePageState extends State<MyHomePage> {
               ],
             ),
           ),
+          if (_showJumpingNotes)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: _JumpingNotesOverlay(
+                  key: ValueKey<int>(_jumpingNotesSeed),
+                ),
+              ),
+            ),
           if (_isGeneratingMidiPreview)
             Positioned.fill(
               child: Container(
