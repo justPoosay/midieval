@@ -808,6 +808,7 @@ class _MyHomePageState extends State<MyHomePage> {
   final Map<String, String> _playbackCacheByUrl = {};
   final Map<int, String> _cachedAudioPathBySketchId = {};
   final Map<int, _ConversionDiagnostics> _conversionDiagnostics = {};
+  final Set<int> _expandedDiagnosticsSketches = <int>{};
   bool isRecording = false;
   bool _isSavingRecording = false;
   DateTime? _recordingStartedAt;
@@ -911,6 +912,7 @@ class _MyHomePageState extends State<MyHomePage> {
         .select()
         .order('created_at', ascending: false);
     _remoteSketches = List<Map<String, dynamic>>.from(data);
+    _hydrateDiagnosticsFromSketches(_remoteSketches);
     return _mergedSketches();
   }
 
@@ -986,6 +988,90 @@ class _MyHomePageState extends State<MyHomePage> {
       if (sketch['id'] == sketchId) return sketch['title']?.toString();
     }
     return null;
+  }
+
+  void _hydrateDiagnosticsFromSketches(List<Map<String, dynamic>> sketches) {
+    for (final sketch in sketches) {
+      final id = sketch['id'];
+      if (id is! int) continue;
+      final parsed = _diagnosticsFromJson(sketch['diagnostics']);
+      if (parsed != null) {
+        _conversionDiagnostics[id] = parsed;
+      }
+    }
+  }
+
+  Map<String, dynamic> _diagnosticsToJson(_ConversionDiagnostics d) {
+    return {
+      'detected_bpm': d.detectedBpm,
+      'meter_top': d.meterTop,
+      'meter_bottom': d.meterBottom,
+      'key_guess': d.keyGuess,
+      'average_confidence': d.averageConfidence,
+      'note_count': d.noteCount,
+      'duration_seconds': d.durationSeconds,
+      'unstable_regions': d.unstableRegions
+          .map(
+            (r) => {
+              'start_tick': r.startTick,
+              'end_tick': r.endTick,
+              'label': r.label,
+            },
+          )
+          .toList(),
+    };
+  }
+
+  _ConversionDiagnostics? _diagnosticsFromJson(dynamic raw) {
+    if (raw is! Map) return null;
+    final map = Map<String, dynamic>.from(raw);
+    final bpm = (map['detected_bpm'] as num?)?.toInt();
+    final meterTop = (map['meter_top'] as num?)?.toInt();
+    final meterBottom = (map['meter_bottom'] as num?)?.toInt();
+    final keyGuess = map['key_guess']?.toString();
+    final avgConfidence = (map['average_confidence'] as num?)?.toDouble();
+    final noteCount = (map['note_count'] as num?)?.toInt();
+    final durationSeconds = (map['duration_seconds'] as num?)?.toDouble();
+    if (bpm == null ||
+        meterTop == null ||
+        meterBottom == null ||
+        keyGuess == null ||
+        avgConfidence == null ||
+        noteCount == null ||
+        durationSeconds == null) {
+      return null;
+    }
+
+    final unstable = <_PitchUnstableRegion>[];
+    final rawRegions = map['unstable_regions'];
+    if (rawRegions is List) {
+      for (final item in rawRegions) {
+        if (item is! Map) continue;
+        final region = Map<String, dynamic>.from(item);
+        final startTick = (region['start_tick'] as num?)?.toInt();
+        final endTick = (region['end_tick'] as num?)?.toInt();
+        final label = region['label']?.toString();
+        if (startTick == null || endTick == null || label == null) continue;
+        unstable.add(
+          _PitchUnstableRegion(
+            startTick: startTick,
+            endTick: endTick,
+            label: label,
+          ),
+        );
+      }
+    }
+
+    return _ConversionDiagnostics(
+      detectedBpm: bpm,
+      meterTop: meterTop,
+      meterBottom: meterBottom,
+      keyGuess: keyGuess,
+      averageConfidence: avgConfidence,
+      noteCount: noteCount,
+      durationSeconds: durationSeconds,
+      unstableRegions: unstable,
+    );
   }
 
   void _upsertSessionSketch(Map<String, dynamic> sketch) {
@@ -1615,7 +1701,11 @@ class _MyHomePageState extends State<MyHomePage> {
           editedMidiBytes,
         );
         if (midiEditDiagnostics != null) {
-          _saveConversionDiagnostics(request.sketchId, midiEditDiagnostics);
+          _saveConversionDiagnostics(
+            request.sketchId,
+            midiEditDiagnostics,
+            persist: true,
+          );
         }
 
         _setJobState(
@@ -1707,7 +1797,11 @@ class _MyHomePageState extends State<MyHomePage> {
       final midiBytes = await _convertWithBasicPitch(audioBytes);
       final rawDiagnostics = _buildDiagnosticsFromMidiBytes(midiBytes);
       if (rawDiagnostics != null) {
-        _saveConversionDiagnostics(request.sketchId, rawDiagnostics);
+        _saveConversionDiagnostics(
+          request.sketchId,
+          rawDiagnostics,
+          persist: true,
+        );
       }
       _setJobState(
         request.sketchId,
@@ -1893,11 +1987,40 @@ class _MyHomePageState extends State<MyHomePage> {
 
   void _saveConversionDiagnostics(
     int sketchId,
-    _ConversionDiagnostics diagnostics,
-  ) {
+    _ConversionDiagnostics diagnostics, {
+    bool persist = false,
+  }) {
     if (!mounted) return;
     setState(() {
       _conversionDiagnostics[sketchId] = diagnostics;
+    });
+    if (persist) {
+      unawaited(_persistDiagnostics(sketchId, diagnostics));
+    }
+  }
+
+  Future<void> _persistDiagnostics(
+    int sketchId,
+    _ConversionDiagnostics diagnostics,
+  ) async {
+    if (sketchId <= 0) return;
+    await Supabase.instance.client
+        .from('sketches')
+        .update({
+          'diagnostics': _diagnosticsToJson(diagnostics),
+          'diagnostics_updated_at': DateTime.now().toIso8601String(),
+        })
+        .match({'id': sketchId});
+  }
+
+  void _toggleDiagnosticsExpanded(int sketchId) {
+    if (!mounted) return;
+    setState(() {
+      if (_expandedDiagnosticsSketches.contains(sketchId)) {
+        _expandedDiagnosticsSketches.remove(sketchId);
+      } else {
+        _expandedDiagnosticsSketches.add(sketchId);
+      }
     });
   }
 
@@ -2288,23 +2411,6 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
-  Future<void> _showDiagnosticsSheet(_ConversionDiagnostics diagnostics) async {
-    if (!mounted) return;
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF0C1322),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      builder: (context) => SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(8, 8, 8, 16),
-          child: _buildDiagnosticsPanel(context, diagnostics),
-        ),
-      ),
-    );
-  }
-
   Future<Uint8List?> _openMidiEditor(
     Uint8List midiBytes, {
     int? tempoOverrideBpm,
@@ -2669,7 +2775,11 @@ class _MyHomePageState extends State<MyHomePage> {
                               job != null &&
                               (job.status == _ConversionStatus.queued ||
                                   job.status == _ConversionStatus.running);
-                          final diagnostics = _conversionDiagnostics[itemId];
+                          final diagnostics =
+                              _conversionDiagnostics[itemId] ??
+                              _diagnosticsFromJson(item['diagnostics']);
+                          final diagnosticsExpanded =
+                              _expandedDiagnosticsSketches.contains(itemId);
 
                           return Dismissible(
                             key: Key(itemId.toString()),
@@ -2696,96 +2806,112 @@ class _MyHomePageState extends State<MyHomePage> {
                                 ),
                               ),
                               color: const Color(0xFF121A2D),
-                              child: ListTile(
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 6,
-                                ),
-                                leading: Container(
-                                  width: 42,
-                                  height: 42,
-                                  decoration: BoxDecoration(
-                                    color: colorScheme.primary.withValues(
-                                      alpha: 0.18,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  ListTile(
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 6,
                                     ),
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                  child: Icon(
-                                    Icons.graphic_eq,
-                                    color: colorScheme.primary,
-                                  ),
-                                ),
-                                title: Text(
-                                  isUploading
-                                      ? '${item['title']} (uploading...)'
-                                      : uploadFailed
-                                      ? '${item['title']} (local only)'
-                                      : item['title'],
-                                ),
-                                subtitle: Text(
-                                  job != null
-                                      ? '${item['created_at'].toString().substring(0, 10)} • ${job.message}'
-                                      : item['created_at'].toString().substring(
-                                          0,
-                                          10,
+                                    leading: Container(
+                                      width: 42,
+                                      height: 42,
+                                      decoration: BoxDecoration(
+                                        color: colorScheme.primary.withValues(
+                                          alpha: 0.18,
                                         ),
-                                ),
-                                trailing: Wrap(
-                                  spacing: 12, // odstęp między ikonami
-                                  children: [
-                                    if (diagnostics != null)
-                                      IconButton(
-                                        icon: const Icon(
-                                          Icons.analytics_outlined,
-                                        ),
-                                        color: const Color(0xFF6EE7FF),
-                                        onPressed: () =>
-                                            _showDiagnosticsSheet(diagnostics),
-                                        tooltip: context.tr('diagnostics'),
+                                        borderRadius: BorderRadius.circular(14),
                                       ),
-                                    IconButton(
-                                      icon: const Icon(
-                                        Icons.auto_awesome,
-                                        color: Colors.deepPurpleAccent,
-                                      ), // Ikona magii
-                                      onPressed: isUploading
-                                          ? null
-                                          : jobActive
-                                          ? null
-                                          : () => convertAudioToMidi(
-                                              audioPath,
-                                              itemId,
-                                            ),
-                                      tooltip: "Konwertuj na MIDI",
+                                      child: Icon(
+                                        Icons.graphic_eq,
+                                        color: colorScheme.primary,
+                                      ),
                                     ),
-                                    IconButton(
-                                      icon: isLoading
-                                          ? SizedBox(
-                                              width: 20,
-                                              height: 20,
-                                              child: CircularProgressIndicator(
-                                                strokeWidth: 2.4,
-                                                color: colorScheme.primary,
-                                              ),
-                                            )
-                                          : Icon(
-                                              isPlaying
-                                                  ? Icons.stop_circle
-                                                  : Icons.play_arrow,
-                                              color: isPlaying
-                                                  ? Colors.redAccent
-                                                  : colorScheme.primary,
-                                            ),
-                                      onPressed: () =>
-                                          playOrStopSketch(itemId, audioPath),
-                                      tooltip: isPlaying
-                                          ? "Zatrzymaj odtwarzanie"
-                                          : "Odtwórz klip",
+                                    title: Text(
+                                      isUploading
+                                          ? '${item['title']} (uploading...)'
+                                          : uploadFailed
+                                          ? '${item['title']} (local only)'
+                                          : item['title'],
                                     ),
-                                  ],
-                                ),
-                                isThreeLine: job != null,
-                                minVerticalPadding: 8,
+                                    subtitle: Text(
+                                      job != null
+                                          ? '${item['created_at'].toString().substring(0, 10)} • ${job.message}'
+                                          : item['created_at']
+                                                .toString()
+                                                .substring(0, 10),
+                                    ),
+                                    trailing: Wrap(
+                                      spacing: 12, // odstęp między ikonami
+                                      children: [
+                                        if (diagnostics != null)
+                                          IconButton(
+                                            icon: const Icon(
+                                              Icons.analytics_outlined,
+                                            ),
+                                            color: const Color(0xFF6EE7FF),
+                                            onPressed: () =>
+                                                _toggleDiagnosticsExpanded(
+                                                  itemId,
+                                                ),
+                                            tooltip: context.tr('diagnostics'),
+                                          ),
+                                        IconButton(
+                                          icon: const Icon(
+                                            Icons.auto_awesome,
+                                            color: Colors.deepPurpleAccent,
+                                          ), // Ikona magii
+                                          onPressed: isUploading
+                                              ? null
+                                              : jobActive
+                                              ? null
+                                              : () => convertAudioToMidi(
+                                                  audioPath,
+                                                  itemId,
+                                                ),
+                                          tooltip: "Konwertuj na MIDI",
+                                        ),
+                                        IconButton(
+                                          icon: isLoading
+                                              ? SizedBox(
+                                                  width: 20,
+                                                  height: 20,
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                        strokeWidth: 2.4,
+                                                        color:
+                                                            colorScheme.primary,
+                                                      ),
+                                                )
+                                              : Icon(
+                                                  isPlaying
+                                                      ? Icons.stop_circle
+                                                      : Icons.play_arrow,
+                                                  color: isPlaying
+                                                      ? Colors.redAccent
+                                                      : colorScheme.primary,
+                                                ),
+                                          onPressed: () => playOrStopSketch(
+                                            itemId,
+                                            audioPath,
+                                          ),
+                                          tooltip: isPlaying
+                                              ? "Zatrzymaj odtwarzanie"
+                                              : "Odtwórz klip",
+                                        ),
+                                      ],
+                                    ),
+                                    isThreeLine: job != null,
+                                    minVerticalPadding: 8,
+                                  ),
+                                  if (diagnostics != null &&
+                                      diagnosticsExpanded)
+                                    _buildDiagnosticsPanel(
+                                      context,
+                                      diagnostics,
+                                    ),
+                                ],
                               ),
                             ),
                           );
