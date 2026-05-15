@@ -10,6 +10,7 @@ import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import 'package:http/http.dart' as http;
 
@@ -25,6 +26,9 @@ void main() async {
 
   runApp(const MyApp());
 }
+
+const String _brandLogoAsset = 'assets/branding/logo_concept.svg';
+const String _brandLogoMarkAsset = 'assets/branding/logo_mark.svg';
 
 enum AppLanguage { en, pl }
 
@@ -335,17 +339,13 @@ class _AuthScreenState extends State<AuthScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.security, size: 80, color: Colors.amber),
-            const SizedBox(height: 16),
-            const Text(
-              "MIDieval",
-              style: TextStyle(
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
-                color: Colors.amber,
-              ),
+            SvgPicture.asset(_brandLogoAsset, width: 280),
+            const SizedBox(height: 20),
+            Text(
+              context.tr('app_title'),
+              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
             ),
-            const Text("Zaloguj się, aby tworzyć kroniki nucenia"),
+            Text(context.tr('auth_subtitle')),
             const SizedBox(height: 32),
             TextField(
               controller: _emailController,
@@ -1735,9 +1735,15 @@ class _MyHomePageState extends State<MyHomePage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          context.tr('app_title'),
-          style: const TextStyle(fontWeight: FontWeight.w800),
+        title: Row(
+          children: [
+            SvgPicture.asset(_brandLogoMarkAsset, width: 24, height: 24),
+            const SizedBox(width: 8),
+            Text(
+              context.tr('app_title'),
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ],
         ),
         actions: [
           IconButton(

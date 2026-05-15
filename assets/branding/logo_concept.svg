@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="360" viewBox="0 0 920 360">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a1020"/>
+      <stop offset="60%" stop-color="#111a33"/>
+      <stop offset="100%" stop-color="#1b1440"/>
+    </linearGradient>
+    <linearGradient id="accentA" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6ee7ff"/>
+      <stop offset="100%" stop-color="#57b7ff"/>
+    </linearGradient>
+    <linearGradient id="accentB" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#d493ff"/>
+      <stop offset="100%" stop-color="#a97bff"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="920" height="360" rx="28" fill="url(#bg)"/>
+
+  <g transform="translate(70,62)">
+    <rect width="230" height="230" rx="50" fill="#101a36" stroke="#2f4375" stroke-width="2"/>
+    <circle cx="115" cy="115" r="86" fill="#0f1730" stroke="#354979" stroke-width="2"/>
+
+    <g opacity="0.65">
+      <line x1="54" y1="90" x2="176" y2="90" stroke="#3a4f85" stroke-width="2"/>
+      <line x1="54" y1="105" x2="176" y2="105" stroke="#3a4f85" stroke-width="2"/>
+      <line x1="54" y1="120" x2="176" y2="120" stroke="#3a4f85" stroke-width="2"/>
+      <line x1="54" y1="135" x2="176" y2="135" stroke="#3a4f85" stroke-width="2"/>
+      <line x1="54" y1="150" x2="176" y2="150" stroke="#3a4f85" stroke-width="2"/>
+    </g>
+
+    <path d="M116 63 L116 155" stroke="url(#accentA)" stroke-width="9" stroke-linecap="round" filter="url(#glow)"/>
+    <circle cx="92" cy="158" r="18" fill="url(#accentA)" filter="url(#glow)"/>
+    <path d="M116 85 C128 75, 140 75, 152 85 C164 95, 164 111, 152 121 C140 131, 128 131, 116 121" fill="none" stroke="url(#accentA)" stroke-width="6" stroke-linecap="round" filter="url(#glow)"/>
+
+    <path d="M116 63 L160 49 L160 137" stroke="url(#accentB)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+    <circle cx="160" cy="140" r="18" fill="url(#accentB)" filter="url(#glow)"/>
+  </g>
+
+  <g transform="translate(340,118)">
+    <text x="0" y="72" font-family="Segoe UI, Arial, sans-serif" font-size="84" font-weight="800" fill="#eef3ff" letter-spacing="0">MIDieval</text>
+    <rect x="0" y="92" width="330" height="5" rx="2.5" fill="url(#accentA)"/>
+    <text x="0" y="132" font-family="Segoe UI, Arial, sans-serif" font-size="24" fill="#b8c8f3">Voice to MIDI, tuned for real singing</text>
+  </g>
+</svg>
