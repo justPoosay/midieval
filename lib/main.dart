@@ -240,6 +240,7 @@ class _MyHomePageState extends State<MyHomePage> {
   int _nextLocalSketchId = -1;
   int? _playingSketchId;
   int? _loadingSketchId;
+  final Map<String, String> _playbackCacheByUrl = {};
   bool isRecording = false;
   bool _isSavingRecording = false;
   DateTime? _recordingStartedAt;
@@ -532,7 +533,24 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<String> _localPlaybackPathForUrl(String audioUrl) async {
-    return audioUrl;
+    if (!audioUrl.startsWith('http://') && !audioUrl.startsWith('https://')) {
+      return audioUrl;
+    }
+    final cached = _playbackCacheByUrl[audioUrl];
+    if (cached != null && await File(cached).exists()) {
+      return cached;
+    }
+    final response = await http.get(Uri.parse(audioUrl));
+    if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
+      throw Exception('Could not download audio for playback (${response.statusCode})');
+    }
+    final ext = audioUrl.toLowerCase().contains('.wav') ? 'wav' : 'bin';
+    final dir = await getTemporaryDirectory();
+    final localPath =
+        '${dir.path}/sketch_cache_${audioUrl.hashCode.abs()}_${DateTime.now().millisecondsSinceEpoch}.$ext';
+    await File(localPath).writeAsBytes(response.bodyBytes, flush: true);
+    _playbackCacheByUrl[audioUrl] = localPath;
+    return localPath;
   }
   Future<void> playOrStopSketch(int sketchId, String audioUrl) async {
     try {
@@ -557,11 +575,16 @@ class _MyHomePageState extends State<MyHomePage> {
           : null;
       await audioPlayer.stop();
       if (isLocalFile) {
-        await audioPlayer.setSourceDeviceFile(sourcePath);
+        await audioPlayer.play(
+          DeviceFileSource(sourcePath),
+          mode: PlayerMode.mediaPlayer,
+        );
       } else {
-        await audioPlayer.setSourceUrl(sourcePath);
+        await audioPlayer.play(
+          UrlSource(sourcePath),
+          mode: PlayerMode.mediaPlayer,
+        );
       }
-      await audioPlayer.resume();
 
       if (mounted) {
         setState(() {
@@ -1044,6 +1067,14 @@ class _MyHomePageState extends State<MyHomePage> {
     _timeSigTopController.dispose();
     _timeSigBottomController.dispose();
     _tempoController.dispose();
+    for (final path in _playbackCacheByUrl.values) {
+      final f = File(path);
+      if (f.existsSync()) {
+        try {
+          f.deleteSync();
+        } catch (_) {}
+      }
+    }
     audioRecorder.dispose();
     audioPlayer.dispose();
     super.dispose();
