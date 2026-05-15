@@ -92,6 +92,15 @@ class AppStrings {
     'scale_off': 'Key/Scale: unconstrained',
     'sketches': 'Sketches',
     'no_sketches': 'No sketches yet',
+    'diagnostics': 'Diagnostics',
+    'detected_bpm': 'Detected BPM',
+    'meter_guess': 'Meter guess',
+    'key_guess': 'Key guess',
+    'avg_confidence': 'Avg confidence',
+    'unstable_pitch': 'Unstable pitch',
+    'none': 'None',
+    'notes_count': 'Notes',
+    'clip_duration': 'Duration',
   };
 
   static const Map<String, String> _pl = {
@@ -130,6 +139,15 @@ class AppStrings {
     'scale_off': 'Tonacja/Skala: bez ograniczen',
     'sketches': 'Szkice',
     'no_sketches': 'Brak szkicow',
+    'diagnostics': 'Diagnostyka',
+    'detected_bpm': 'Wykryte BPM',
+    'meter_guess': 'Sugestia metrum',
+    'key_guess': 'Sugestia tonacji',
+    'avg_confidence': 'Srednia pewnosc',
+    'unstable_pitch': 'Niestabilny pitch',
+    'none': 'Brak',
+    'notes_count': 'Nuty',
+    'clip_duration': 'Dlugosc',
   };
 
   static String of(BuildContext context, String key) {
@@ -671,6 +689,40 @@ class _ConversionJobState {
   final double progress;
 }
 
+class _PitchUnstableRegion {
+  const _PitchUnstableRegion({
+    required this.startTick,
+    required this.endTick,
+    required this.label,
+  });
+
+  final int startTick;
+  final int endTick;
+  final String label;
+}
+
+class _ConversionDiagnostics {
+  const _ConversionDiagnostics({
+    required this.detectedBpm,
+    required this.meterTop,
+    required this.meterBottom,
+    required this.keyGuess,
+    required this.averageConfidence,
+    required this.noteCount,
+    required this.durationSeconds,
+    required this.unstableRegions,
+  });
+
+  final int detectedBpm;
+  final int meterTop;
+  final int meterBottom;
+  final String keyGuess;
+  final double averageConfidence;
+  final int noteCount;
+  final double durationSeconds;
+  final List<_PitchUnstableRegion> unstableRegions;
+}
+
 class _JumpingNotesOverlay extends StatelessWidget {
   const _JumpingNotesOverlay({super.key});
 
@@ -754,6 +806,7 @@ class _MyHomePageState extends State<MyHomePage> {
   int? _playingSketchId;
   int? _loadingSketchId;
   final Map<String, String> _playbackCacheByUrl = {};
+  final Map<int, _ConversionDiagnostics> _conversionDiagnostics = {};
   bool isRecording = false;
   bool _isSavingRecording = false;
   DateTime? _recordingStartedAt;
@@ -889,6 +942,51 @@ class _MyHomePageState extends State<MyHomePage> {
     ];
   }
 
+  int _nextRecordingIndex() {
+    final matcher = RegExp(r'^Recording\s+(\d+)$', caseSensitive: false);
+    var maxIndex = 0;
+    for (final sketch in _mergedSketches()) {
+      final title = sketch['title']?.toString() ?? '';
+      final match = matcher.firstMatch(title.trim());
+      if (match == null) continue;
+      final value = int.tryParse(match.group(1) ?? '');
+      if (value != null && value > maxIndex) {
+        maxIndex = value;
+      }
+    }
+    return maxIndex + 1;
+  }
+
+  String _storageStemFromTitle(String rawTitle) {
+    final normalized = rawTitle
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_|_$'), '');
+    if (normalized.isEmpty) return 'recording';
+    return normalized;
+  }
+
+  String _storageMidiFileName({
+    required int sketchId,
+    required String timestamp,
+  }) {
+    final title = _sketchTitleById(sketchId) ?? 'recording_$sketchId';
+    final stem = _storageStemFromTitle(title);
+    return '${stem}_$timestamp.midi';
+  }
+
+  String? _sketchTitleById(int sketchId) {
+    for (final sketch in _sessionSketches) {
+      if (sketch['id'] == sketchId) return sketch['title']?.toString();
+    }
+    for (final sketch in _remoteSketches) {
+      if (sketch['id'] == sketchId) return sketch['title']?.toString();
+    }
+    return null;
+  }
+
   void _upsertSessionSketch(Map<String, dynamic> sketch) {
     final index = _sessionSketches.indexWhere(
       (item) => item['id'] == sketch['id'],
@@ -972,10 +1070,13 @@ class _MyHomePageState extends State<MyHomePage> {
 
       if (path != null) {
         final file = File(path);
-        final fileName = "voice_${DateTime.now().millisecondsSinceEpoch}.wav";
+        final recordingIndex = _nextRecordingIndex();
+        final title = 'Recording $recordingIndex';
+        final fileStem = _storageStemFromTitle(title);
+        final fileName =
+            '${fileStem}_${DateTime.now().millisecondsSinceEpoch}.wav';
         final userId = Supabase.instance.client.auth.currentUser!.id;
         final createdAt = DateTime.now();
-        final title = 'Nucenie ${createdAt.hour}:${createdAt.minute}';
         localId = _nextLocalSketchId--;
         final localSketch = <String, dynamic>{
           'id': localId,
@@ -1008,6 +1109,8 @@ class _MyHomePageState extends State<MyHomePage> {
               'user_id': userId,
               'title': title,
               'audio_path': publicUrl,
+              'source_type': 'recording',
+              'status': 'ready',
             })
             .select()
             .single();
@@ -1311,7 +1414,10 @@ class _MyHomePageState extends State<MyHomePage> {
 
       // 4. Tworzymy unikalną nazwę, żeby uniknąć starych plików w pamięci
       final String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-      final midiFileName = "melody_${sketchId}_$timestamp.midi";
+      final midiFileName = _storageMidiFileName(
+        sketchId: sketchId,
+        timestamp: timestamp,
+      );
 
       // 5. Upload do Supabase Storage
       await Supabase.instance.client.storage
@@ -1334,9 +1440,9 @@ class _MyHomePageState extends State<MyHomePage> {
       await Supabase.instance.client
           .from('sketches')
           .update({
-            'title':
-                '🎵 MIDI: ${DateTime.now().hour}:${DateTime.now().minute}:${DateTime.now().second}',
             'audio_path': midiUrl,
+            'status': 'ready',
+            'last_error': null,
           })
           .match({'id': sketchId});
 
@@ -1430,6 +1536,12 @@ class _MyHomePageState extends State<MyHomePage> {
           }
           return;
         }
+        final midiEditDiagnostics = _buildDiagnosticsFromMidiBytes(
+          editedMidiBytes,
+        );
+        if (midiEditDiagnostics != null) {
+          _saveConversionDiagnostics(request.sketchId, midiEditDiagnostics);
+        }
 
         _setJobState(
           request.sketchId,
@@ -1440,7 +1552,10 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
         );
         final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-        final midiFileName = "melody_${request.sketchId}_$timestamp.midi";
+        final midiFileName = _storageMidiFileName(
+          sketchId: request.sketchId,
+          timestamp: timestamp,
+        );
         await Supabase.instance.client.storage
             .from('audio-samples')
             .uploadBinary(
@@ -1460,6 +1575,16 @@ class _MyHomePageState extends State<MyHomePage> {
               'title':
                   '🎵 MIDI: ${DateTime.now().hour}:${DateTime.now().minute}:${DateTime.now().second}',
               'audio_path': midiUrl,
+            })
+            .match({'id': request.sketchId});
+        await Supabase.instance.client
+            .from('sketches')
+            .update({
+              'title':
+                  _sketchTitleById(request.sketchId) ??
+                  'Recording ${request.sketchId}',
+              'status': 'ready',
+              'last_error': null,
             })
             .match({'id': request.sketchId});
 
@@ -1507,6 +1632,10 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
       );
       final midiBytes = await _convertWithBasicPitch(audioBytes);
+      final rawDiagnostics = _buildDiagnosticsFromMidiBytes(midiBytes);
+      if (rawDiagnostics != null) {
+        _saveConversionDiagnostics(request.sketchId, rawDiagnostics);
+      }
       _setJobState(
         request.sketchId,
         const _ConversionJobState(
@@ -1552,7 +1681,10 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
       );
       final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-      final midiFileName = "melody_${request.sketchId}_$timestamp.midi";
+      final midiFileName = _storageMidiFileName(
+        sketchId: request.sketchId,
+        timestamp: timestamp,
+      );
       await Supabase.instance.client.storage
           .from('audio-samples')
           .uploadBinary(
@@ -1574,6 +1706,16 @@ class _MyHomePageState extends State<MyHomePage> {
             'audio_path': midiUrl,
           })
           .match({'id': request.sketchId});
+      await Supabase.instance.client
+          .from('sketches')
+          .update({
+            'title':
+                _sketchTitleById(request.sketchId) ??
+                'Recording ${request.sketchId}',
+            'status': 'ready',
+            'last_error': null,
+          })
+          .match({'id': request.sketchId});
 
       _setJobState(
         request.sketchId,
@@ -1593,6 +1735,12 @@ class _MyHomePageState extends State<MyHomePage> {
         setState(() => _conversionJobs.remove(request.sketchId));
       }
     } catch (e) {
+      unawaited(
+        Supabase.instance.client
+            .from('sketches')
+            .update({'status': 'failed', 'last_error': e.toString()})
+            .match({'id': request.sketchId}),
+      );
       _setJobState(
         request.sketchId,
         _ConversionJobState(
@@ -1668,6 +1816,420 @@ class _MyHomePageState extends State<MyHomePage> {
   void _setJobState(int sketchId, _ConversionJobState state) {
     if (!mounted) return;
     setState(() => _conversionJobs[sketchId] = state);
+  }
+
+  void _saveConversionDiagnostics(
+    int sketchId,
+    _ConversionDiagnostics diagnostics,
+  ) {
+    if (!mounted) return;
+    setState(() {
+      _conversionDiagnostics[sketchId] = diagnostics;
+    });
+  }
+
+  _ConversionDiagnostics? _buildDiagnosticsFromMidiBytes(Uint8List midiBytes) {
+    final parsed = ParsedMidi.tryParse(midiBytes);
+    if (parsed == null || parsed.notes.isEmpty) return null;
+    return _analyzeParsedMidi(parsed);
+  }
+
+  _ConversionDiagnostics _analyzeParsedMidi(ParsedMidi parsed) {
+    final notes = parsed.notes.toList()
+      ..sort((a, b) => a.startTick.compareTo(b.startTick));
+    final firstTick = notes.map((n) => n.startTick).reduce(math.min);
+    final lastTick = notes
+        .map((n) => n.startTick + n.durationTicks)
+        .reduce(math.max);
+    final durationTicks = math.max(1, lastTick - firstTick);
+    final durationSeconds =
+        (durationTicks / parsed.ticksPerQuarter) * (60.0 / parsed.tempoBpm);
+    final meter = _guessMeterFromNotes(parsed, notes, firstTick);
+    final keyGuess = _guessKeyFromNotes(notes);
+    final confidence =
+        notes
+            .map((n) => (n.velocity.clamp(1, 127) / 127.0))
+            .fold<double>(0.0, (sum, v) => sum + v) /
+        notes.length;
+    final unstable = _detectUnstablePitchRegions(
+      parsed: parsed,
+      notes: notes,
+      firstTick: firstTick,
+      meterTop: meter.$1,
+      meterBottom: meter.$2,
+    );
+    return _ConversionDiagnostics(
+      detectedBpm: parsed.tempoBpm,
+      meterTop: meter.$1,
+      meterBottom: meter.$2,
+      keyGuess: keyGuess,
+      averageConfidence: confidence,
+      noteCount: notes.length,
+      durationSeconds: durationSeconds,
+      unstableRegions: unstable,
+    );
+  }
+
+  (int, int) _guessMeterFromNotes(
+    ParsedMidi parsed,
+    List<EditableMidiNote> notes,
+    int firstTick,
+  ) {
+    const candidates = <(int, int)>[(4, 4), (3, 4), (6, 8)];
+    if (notes.length < 4) return (parsed.beatsPerMeasure, parsed.beatUnit);
+
+    var bestCandidate = (parsed.beatsPerMeasure, parsed.beatUnit);
+    var bestScore = double.negativeInfinity;
+
+    for (final candidate in candidates) {
+      final beatTicks = ((parsed.ticksPerQuarter * 4) / candidate.$2)
+          .round()
+          .clamp(1, 99999);
+      final measureTicks = beatTicks * candidate.$1;
+      var onsetError = 0.0;
+      var durationError = 0.0;
+      var boundaryHits = 0;
+
+      for (final note in notes) {
+        final aligned = note.startTick - firstTick;
+        final nearest = (aligned / beatTicks).round() * beatTicks;
+        onsetError += ((aligned - nearest).abs() / beatTicks).clamp(0.0, 1.0);
+        final beats = note.durationTicks / beatTicks;
+        durationError += (beats - beats.roundToDouble()).abs().clamp(0.0, 1.0);
+
+        final mod = aligned % measureTicks;
+        final tol = (beatTicks * 0.20).round();
+        if (mod <= tol || (measureTicks - mod) <= tol) {
+          boundaryHits++;
+        }
+      }
+
+      final avgOnsetError = onsetError / notes.length;
+      final avgDurationError = durationError / notes.length;
+      final boundaryRatio = boundaryHits / notes.length;
+      final score =
+          (1.0 - avgOnsetError) * 0.58 +
+          (1.0 - avgDurationError) * 0.25 +
+          boundaryRatio * 0.17;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestCandidate = candidate;
+      }
+    }
+
+    if (bestScore < 0.48) {
+      return (parsed.beatsPerMeasure, parsed.beatUnit);
+    }
+    return bestCandidate;
+  }
+
+  String _guessKeyFromNotes(List<EditableMidiNote> notes) {
+    final histogram = List<double>.filled(12, 0.0);
+    for (final note in notes) {
+      final pc = note.note % 12;
+      final weight = note.durationTicks * (0.35 + (note.velocity / 127.0));
+      histogram[pc] += weight;
+    }
+    final sum = histogram.fold<double>(0.0, (a, b) => a + b);
+    if (sum <= 0) return 'C Major';
+    final normalized = histogram.map((v) => v / sum).toList();
+
+    const major = <double>[
+      6.35,
+      2.23,
+      3.48,
+      2.33,
+      4.38,
+      4.09,
+      2.52,
+      5.19,
+      2.39,
+      3.66,
+      2.29,
+      2.88,
+    ];
+    const minor = <double>[
+      6.33,
+      2.68,
+      3.52,
+      5.38,
+      2.60,
+      3.53,
+      2.54,
+      4.75,
+      3.98,
+      2.69,
+      3.34,
+      3.17,
+    ];
+
+    const names = <String>[
+      'C',
+      'C#',
+      'D',
+      'D#',
+      'E',
+      'F',
+      'F#',
+      'G',
+      'G#',
+      'A',
+      'A#',
+      'B',
+    ];
+
+    var bestScore = double.negativeInfinity;
+    var bestName = 'C';
+    var bestMode = 'Major';
+    for (var tonic = 0; tonic < 12; tonic++) {
+      var majorScore = 0.0;
+      var minorScore = 0.0;
+      for (var i = 0; i < 12; i++) {
+        final idx = (i + tonic) % 12;
+        majorScore += normalized[idx] * major[i];
+        minorScore += normalized[idx] * minor[i];
+      }
+      if (majorScore > bestScore) {
+        bestScore = majorScore;
+        bestName = names[tonic];
+        bestMode = 'Major';
+      }
+      if (minorScore > bestScore) {
+        bestScore = minorScore;
+        bestName = names[tonic];
+        bestMode = 'Minor';
+      }
+    }
+    return '$bestName $bestMode';
+  }
+
+  List<_PitchUnstableRegion> _detectUnstablePitchRegions({
+    required ParsedMidi parsed,
+    required List<EditableMidiNote> notes,
+    required int firstTick,
+    required int meterTop,
+    required int meterBottom,
+  }) {
+    if (notes.length < 3) return const [];
+    final quarterTicks = parsed.ticksPerQuarter;
+    final beatTicks = ((quarterTicks * 4) / meterBottom).round().clamp(
+      1,
+      99999,
+    );
+    final shortDuration = (beatTicks * 0.50).round();
+    final quickGap = (beatTicks * 0.40).round();
+    final regions = <_PitchUnstableRegion>[];
+
+    var startIndex = 0;
+    while (startIndex < notes.length) {
+      var endIndex = startIndex;
+      while (endIndex + 1 < notes.length) {
+        final gap = notes[endIndex + 1].startTick - notes[endIndex].startTick;
+        if (gap > quickGap) break;
+        endIndex++;
+      }
+
+      final clusterSize = endIndex - startIndex + 1;
+      if (clusterSize >= 3) {
+        var shortCount = 0;
+        var microMotion = 0;
+        var minPitch = 127;
+        var maxPitch = 0;
+        for (var i = startIndex; i <= endIndex; i++) {
+          final n = notes[i];
+          minPitch = math.min(minPitch, n.note);
+          maxPitch = math.max(maxPitch, n.note);
+          if (n.durationTicks <= shortDuration) shortCount++;
+          if (i > startIndex) {
+            final delta = (n.note - notes[i - 1].note).abs();
+            if (delta > 0 && delta <= 2) microMotion++;
+          }
+        }
+
+        final shortRatio = shortCount / clusterSize;
+        final pitchSpan = maxPitch - minPitch;
+        if (shortRatio >= 0.60 && microMotion >= 2 && pitchSpan <= 4) {
+          final startTick = notes[startIndex].startTick;
+          final endTick =
+              notes[endIndex].startTick + notes[endIndex].durationTicks;
+          final startPos = _tickToPositionLabel(
+            tick: startTick,
+            firstTick: firstTick,
+            beatTicks: beatTicks,
+            meterTop: meterTop,
+          );
+          final endPos = _tickToPositionLabel(
+            tick: endTick,
+            firstTick: firstTick,
+            beatTicks: beatTicks,
+            meterTop: meterTop,
+          );
+          regions.add(
+            _PitchUnstableRegion(
+              startTick: startTick,
+              endTick: endTick,
+              label: '$startPos -> $endPos',
+            ),
+          );
+        }
+      }
+
+      startIndex = endIndex + 1;
+    }
+    return regions.take(4).toList();
+  }
+
+  String _tickToPositionLabel({
+    required int tick,
+    required int firstTick,
+    required int beatTicks,
+    required int meterTop,
+  }) {
+    final alignedTick = math.max(0, tick - firstTick);
+    final measureTicks = beatTicks * meterTop;
+    final bar = (alignedTick ~/ measureTicks) + 1;
+    final withinMeasure = alignedTick % measureTicks;
+    final beat = (withinMeasure ~/ beatTicks) + 1;
+    final subTicks = math.max(1, beatTicks ~/ 4);
+    final sub = ((withinMeasure % beatTicks) ~/ subTicks) + 1;
+    if (sub <= 1) return 'Bar $bar Beat $beat';
+    return 'Bar $bar Beat $beat.$sub';
+  }
+
+  String _formatSeconds(double seconds) {
+    final total = math.max(0, seconds.round());
+    final min = total ~/ 60;
+    final sec = total % 60;
+    return '${min.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildDiagnosticsPanel(
+    BuildContext context,
+    _ConversionDiagnostics diagnostics,
+  ) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final confidencePct = (diagnostics.averageConfidence * 100).clamp(
+      0.0,
+      100.0,
+    );
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D1425),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF2A3658)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            context.tr('diagnostics'),
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: colorScheme.primary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _diagChip(
+                context.tr('detected_bpm'),
+                diagnostics.detectedBpm.toString(),
+              ),
+              _diagChip(
+                context.tr('meter_guess'),
+                '${diagnostics.meterTop}/${diagnostics.meterBottom}',
+              ),
+              _diagChip(context.tr('key_guess'), diagnostics.keyGuess),
+              _diagChip(
+                context.tr('avg_confidence'),
+                '${confidencePct.toStringAsFixed(0)}%',
+              ),
+              _diagChip(
+                context.tr('notes_count'),
+                diagnostics.noteCount.toString(),
+              ),
+              _diagChip(
+                context.tr('clip_duration'),
+                _formatSeconds(diagnostics.durationSeconds),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            context.tr('unstable_pitch'),
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          if (diagnostics.unstableRegions.isEmpty)
+            Text(
+              context.tr('none'),
+              style: TextStyle(color: colorScheme.onSurfaceVariant),
+            )
+          else
+            ...diagnostics.unstableRegions.map(
+              (region) => Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  '- ${region.label}',
+                  style: TextStyle(color: colorScheme.onSurfaceVariant),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _diagChip(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF151F35),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF2A3658)),
+      ),
+      child: RichText(
+        text: TextSpan(
+          style: const TextStyle(fontSize: 12, color: Color(0xFFEAF0FF)),
+          children: [
+            TextSpan(
+              text: '$label: ',
+              style: const TextStyle(
+                color: Color(0xFF9FB0D8),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            TextSpan(
+              text: value,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showDiagnosticsSheet(_ConversionDiagnostics diagnostics) async {
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF0C1322),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 16),
+          child: _buildDiagnosticsPanel(context, diagnostics),
+        ),
+      ),
+    );
   }
 
   Future<Uint8List?> _openMidiEditor(
@@ -2040,6 +2602,7 @@ class _MyHomePageState extends State<MyHomePage> {
                               job != null &&
                               (job.status == _ConversionStatus.queued ||
                                   job.status == _ConversionStatus.running);
+                          final diagnostics = _conversionDiagnostics[itemId];
 
                           return Dismissible(
                             key: Key(itemId.toString()),
@@ -2103,6 +2666,16 @@ class _MyHomePageState extends State<MyHomePage> {
                                 trailing: Wrap(
                                   spacing: 12, // odstęp między ikonami
                                   children: [
+                                    if (diagnostics != null)
+                                      IconButton(
+                                        icon: const Icon(
+                                          Icons.analytics_outlined,
+                                        ),
+                                        color: const Color(0xFF6EE7FF),
+                                        onPressed: () =>
+                                            _showDiagnosticsSheet(diagnostics),
+                                        tooltip: context.tr('diagnostics'),
+                                      ),
                                     IconButton(
                                       icon: const Icon(
                                         Icons.auto_awesome,
