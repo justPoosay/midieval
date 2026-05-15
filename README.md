@@ -57,6 +57,69 @@ In practice, this means the app does not rely on a single raw pitch read. It com
 - Pitch cleanup for vibrato, scoops, harmonics, and short unstable fragments.
 - Phrase quantization for simple monophonic lines such as a C major scale.
 
+## ToDo / Changelog Checklist
+
+This list tracks the project journey from the beginning.  
+Rule going forward: before each commit, this section is updated.
+
+- [x] Initial Flutter + Supabase app scaffold with auth and `sketches` storage.
+- [x] Record voice clips as mono WAV (44.1 kHz) instead of compressed clip flow.
+- [x] Basic one-tap audio -> MIDI conversion flow.
+- [x] Multiple rounds of humming-stability tuning (less harmonic wobble / swivering).
+- [x] Auto-align generated MIDI notes to timeline start (remove leading silence offset).
+- [x] Better handling of staccato/short note fragmentation in conversion pipeline.
+- [x] Add MIDI preview/editor dialog before final upload.
+- [x] Add piano roll beat/bar grid.
+- [x] Add piano roll drag editing (horizontal timing + duration resize).
+- [x] Add piano roll vertical drag for pitch (replace button-based pitch up/down).
+- [x] Fix inverted vertical drag direction on desktop.
+- [x] Add note labels on blocks (C2, G#3, etc.).
+- [x] Add undo/redo in piano roll (Ctrl+Z / Ctrl+Shift+Z and mobile buttons).
+- [x] Add right-click note delete on desktop.
+- [x] Add right-drag erase behavior on desktop piano roll.
+- [x] Stabilize piano roll layout height (prevent weird shrink/stretch while editing).
+- [x] Add quantize control with improved meter-aware snapping logic.
+- [x] Improve quantize behavior across bars/beats for common quarter/eighth-note patterns.
+- [x] Add conversion queue/background job states in UI.
+- [x] Add generating/loading overlays and progress messages.
+- [x] Improve play/stop button state reset after clip playback completes.
+- [x] Improve clip playback quality and local pre-cache behavior.
+- [x] Keep newly recorded clips visible immediately (session + Supabase sync).
+- [x] Fix refresh action crash (`setState` async callback issue).
+- [x] Add recording/session sketch merge logic (local optimistic rows + remote refresh).
+- [x] Add random melody generator (key + scale + meter aware) and upload result.
+- [x] Add conversion settings panel (tempo lock, meter lock, key/scale constraint).
+- [x] Add mobile-friendly conversion settings layout.
+- [x] Add profile/settings page.
+- [x] Add language switch (English / Polish).
+- [x] UI redesign pass (lighter, less square, new typography, better spacing).
+- [x] Add celebration animation (jumping notes) on successful conversion.
+- [x] Add app branding assets and integrate logo in auth/app bar.
+- [x] Add adaptive Android launcher icon branding.
+- [x] Move from ad-hoc naming to `Recording X` naming for recordings.
+- [x] Keep sketch titles stable after conversion (do not overwrite with temporary MIDI label).
+- [x] Change Supabase Storage naming to deterministic `recording_x` style (no timestamp).
+- [x] Enable deterministic-name uploads with safe overwrite (`upsert`) for WAV.
+- [x] Add diagnostics engine: BPM, meter guess, key guess, confidence, unstable pitch regions.
+- [x] Persist diagnostics to Supabase (`diagnostics` JSON + `diagnostics_updated_at`).
+- [x] Hydrate diagnostics from DB when loading sketches.
+- [x] Show diagnostics inline as expandable section directly under sketch cards.
+- [x] Keep diagnostics accessible by quick analytics action in sketch row.
+- [x] README rewrite in English with clearer project/problem description.
+- [x] Add prototype GIF section in README.
+- [x] Add algorithm pipeline SVG to README.
+- [x] Add detailed "Problem This Project Tackles" explanation in README.
+- [x] Prepare local ML rhythm experiment route (`tool/ml_midi`) and training docs (archived path).
+- [x] Add bridge docs for TorchCrepe and Basic Pitch routes.
+- [] Improve diagnostics confidence quality/scoring calibration (currently coarse heuristic).
+- [] Add richer diagnostics persistence model (optional `conversion_runs` history table).
+- [] Add hosted/production bridge reliability strategy (timeouts, retries, health fallback).
+- [] Consider moving bridge inference on-device/native for mobile (future architecture option).
+- [] Add smart rhythm repair presets (`Tight`, `Natural`, `Legato`, `Staccato`) that switch quantize/snap behavior profiles.
+- [] Add export pack feature: bundle `.mid` + `original.wav` + `cleaned.wav` + diagnostics JSON into one `.zip` for debugging/training.
+- [] Add first-run in-app tutorial overlay (~30 sec): `record -> convert -> quantize -> edit -> apply`.
+- [] Improve core conversion algorithm quality (pitch + rhythm) based on diagnostics feedback; reduce current high-error cases.
+
 ## Prototype Versions
 
 The GIF below shows four prototype versions of the MIDI generator, from early rough detection to the cleaner current version.
