@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -202,10 +203,31 @@ class MyHomePage extends StatefulWidget {
   State<MyHomePage> createState() => _MyHomePageState();
 }
 
+enum _ConversionStatus { queued, running, done, failed }
+
+class _ConversionRequest {
+  const _ConversionRequest({required this.sketchId, required this.audioUrl});
+
+  final int sketchId;
+  final String audioUrl;
+}
+
+class _ConversionJobState {
+  const _ConversionJobState({
+    required this.status,
+    required this.message,
+    required this.progress,
+  });
+
+  final _ConversionStatus status;
+  final String message;
+  final double progress;
+}
+
 class _MyHomePageState extends State<MyHomePage> {
   static const int _recordingSampleRate = 44100;
-  static const String _basicPitchBridgeUrl =
-      'http://127.0.0.1:8090/audio-to-midi';
+  static const String _basicPitchBridgeHostDesktop = '127.0.0.1';
+  static const String _basicPitchBridgeHostAndroidEmulator = '10.0.2.2';
 
   final AudioRecorder audioRecorder = AudioRecorder();
   final AudioPlayer audioPlayer = AudioPlayer();
@@ -238,6 +260,9 @@ class _MyHomePageState extends State<MyHomePage> {
   String _selectedKey = 'C';
   String _selectedScale = 'Major';
   bool _isGeneratingMidiPreview = false;
+  final Queue<_ConversionRequest> _conversionQueue = Queue<_ConversionRequest>();
+  final Map<int, _ConversionJobState> _conversionJobs = {};
+  bool _isProcessingConversionQueue = false;
 
   @override
   void initState() {
@@ -634,9 +659,12 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<Uint8List> _convertWithBasicPitch(Uint8List audioBytes) async {
+    final bridgeHost = Platform.isAndroid
+        ? _basicPitchBridgeHostAndroidEmulator
+        : _basicPitchBridgeHostDesktop;
     final request = http.MultipartRequest(
       'POST',
-      Uri.parse(_basicPitchBridgeUrl),
+      Uri.parse('http://$bridgeHost:8090/audio-to-midi'),
     )
       ..fields['audio_filename'] = 'input.wav'
       ..fields['purify_audio'] = 'true'
@@ -681,6 +709,9 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> convertAudioToMidi(String audioUrl, int sketchId) async {
+    _enqueueConversionJob(sketchId, audioUrl);
+    return;
+    // ignore: dead_code
     try {
       if (mounted) {
         setState(() => _isGeneratingMidiPreview = true);
@@ -769,6 +800,205 @@ class _MyHomePageState extends State<MyHomePage> {
       }
     }
   }
+  void _enqueueConversionJob(int sketchId, String audioUrl) {
+    final active = _conversionJobs[sketchId];
+    if (active != null &&
+        (active.status == _ConversionStatus.queued ||
+            active.status == _ConversionStatus.running)) {
+      return;
+    }
+    setState(() {
+      _conversionJobs[sketchId] = const _ConversionJobState(
+        status: _ConversionStatus.queued,
+        message: 'Queued',
+        progress: 0.0,
+      );
+      _conversionQueue.add(_ConversionRequest(sketchId: sketchId, audioUrl: audioUrl));
+    });
+    unawaited(_processConversionQueue());
+  }
+
+  Future<void> _processConversionQueue() async {
+    if (_isProcessingConversionQueue) return;
+    _isProcessingConversionQueue = true;
+    try {
+      while (_conversionQueue.isNotEmpty) {
+        await _runConversionJob(_conversionQueue.removeFirst());
+      }
+    } finally {
+      _isProcessingConversionQueue = false;
+    }
+  }
+
+  Future<void> _runConversionJob(_ConversionRequest request) async {
+    try {
+      _setJobState(
+        request.sketchId,
+        const _ConversionJobState(
+          status: _ConversionStatus.running,
+          message: 'Downloading audio...',
+          progress: 0.10,
+        ),
+      );
+      final localAudioFile = File(request.audioUrl);
+      final Uint8List audioBytes;
+      if (await localAudioFile.exists()) {
+        audioBytes = await localAudioFile.readAsBytes();
+      } else {
+        audioBytes = await _downloadAudioBytes(request.audioUrl);
+      }
+
+      _setJobState(
+        request.sketchId,
+        const _ConversionJobState(
+          status: _ConversionStatus.running,
+          message: 'Converting to MIDI...',
+          progress: 0.45,
+        ),
+      );
+      final midiBytes = await _convertWithBasicPitch(audioBytes);
+      _setJobState(
+        request.sketchId,
+        const _ConversionJobState(
+          status: _ConversionStatus.running,
+          message: 'Waiting for preview confirmation...',
+          progress: 0.60,
+        ),
+      );
+      final editedMidiBytes = await _openMidiEditor(
+        midiBytes,
+        tempoOverrideBpm: _lockTempo ? _parseTempoBpm() : null,
+        meterOverride: _lockMeter ? (_parseMeter()) : null,
+        keyScaleConstraint: _constrainToScale
+            ? KeyScaleConstraint(
+                tonic: _keyNameToPitchClass(_selectedKey),
+                isMinor: _selectedScale == 'Minor',
+              )
+            : null,
+      );
+      if (editedMidiBytes == null) {
+        _setJobState(
+          request.sketchId,
+          const _ConversionJobState(
+            status: _ConversionStatus.failed,
+            message: 'Canceled in preview',
+            progress: 1.0,
+          ),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 900));
+        if (mounted) {
+          setState(() => _conversionJobs.remove(request.sketchId));
+        }
+        return;
+      }
+      final processedMidiBytes = _postProcessGeneratedMidi(editedMidiBytes);
+
+      _setJobState(
+        request.sketchId,
+        const _ConversionJobState(
+          status: _ConversionStatus.running,
+          message: 'Uploading result...',
+          progress: 0.82,
+        ),
+      );
+      final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
+      final midiFileName = "melody_${request.sketchId}_$timestamp.midi";
+      await Supabase.instance.client.storage
+          .from('audio-samples')
+          .uploadBinary(
+            midiFileName,
+            processedMidiBytes,
+            fileOptions: const FileOptions(contentType: 'audio/midi', upsert: true),
+          );
+      final midiUrl = Supabase.instance.client.storage
+          .from('audio-samples')
+          .getPublicUrl(midiFileName);
+      await Supabase.instance.client
+          .from('sketches')
+          .update({
+            'title':
+                '🎵 MIDI: ${DateTime.now().hour}:${DateTime.now().minute}:${DateTime.now().second}',
+            'audio_path': midiUrl,
+          })
+          .match({'id': request.sketchId});
+
+      _setJobState(
+        request.sketchId,
+        const _ConversionJobState(
+          status: _ConversionStatus.done,
+          message: 'Conversion complete',
+          progress: 1.0,
+        ),
+      );
+      if (mounted) {
+        _sessionSketches.removeWhere((item) => item['id'] == request.sketchId);
+        _refreshSketches();
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      if (mounted) {
+        setState(() => _conversionJobs.remove(request.sketchId));
+      }
+    } catch (e) {
+      _setJobState(
+        request.sketchId,
+        _ConversionJobState(
+          status: _ConversionStatus.failed,
+          message: 'Failed: $e',
+          progress: 1.0,
+        ),
+      );
+    }
+  }
+
+  Uint8List _postProcessGeneratedMidi(Uint8List midiBytes) {
+    final parsed = ParsedMidi.tryParse(midiBytes);
+    if (parsed == null || parsed.notes.isEmpty) return midiBytes;
+    final notes = parsed.notes.map((n) => EditableMidiNote.copy(n)).toList()
+      ..sort((a, b) => a.startTick.compareTo(b.startTick));
+    final firstTick = notes.map((n) => n.startTick).reduce(math.min);
+    for (final note in notes) {
+      note.startTick = math.max(0, note.startTick - firstTick);
+    }
+    if (_constrainToScale) {
+      final tonic = _keyNameToPitchClass(_selectedKey);
+      final allowed = _selectedScale == 'Minor'
+          ? <int>{0, 2, 3, 5, 7, 8, 10}
+          : <int>{0, 2, 4, 5, 7, 9, 11};
+      for (final note in notes) {
+        note.note = _closestNoteInScale(note.note, tonic, allowed);
+      }
+    }
+    final meter = _lockMeter ? _parseMeter() : null;
+    final tempo = _lockTempo ? _parseTempoBpm() : null;
+    return parsed.rebuild(
+      notes,
+      tempoOverrideBpm: tempo,
+      beatsPerMeasureOverride: meter?.beatsPerMeasure,
+      beatUnitOverride: meter?.beatUnit,
+    );
+  }
+
+  int _closestNoteInScale(int midiNote, int tonic, Set<int> scale) {
+    var best = midiNote;
+    var bestDistance = 999;
+    for (var delta = -3; delta <= 3; delta++) {
+      final candidate = (midiNote + delta).clamp(0, 127);
+      final pitchClass = ((candidate - tonic) % 12 + 12) % 12;
+      if (!scale.contains(pitchClass)) continue;
+      final distance = (candidate - midiNote).abs();
+      if (distance < bestDistance) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+    return best;
+  }
+
+  void _setJobState(int sketchId, _ConversionJobState state) {
+    if (!mounted) return;
+    setState(() => _conversionJobs[sketchId] = state);
+  }
+
   Future<Uint8List?> _openMidiEditor(
     Uint8List midiBytes, {
     int? tempoOverrideBpm,
@@ -822,6 +1052,7 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final isNarrowPhone = MediaQuery.of(context).size.width < 420;
 
     return Scaffold(
       appBar: AppBar(
@@ -971,6 +1202,7 @@ class _MyHomePageState extends State<MyHomePage> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
                           children: [
                             Switch(
                               value: _lockTempo,
@@ -979,13 +1211,13 @@ class _MyHomePageState extends State<MyHomePage> {
                               },
                             ),
                             const SizedBox(width: 4),
-                            const Text(
-                              'Tempo Lock',
-                              style: TextStyle(fontWeight: FontWeight.w700),
+                            Text(
+                              isNarrowPhone ? 'Tempo' : 'Tempo Lock',
+                              style: const TextStyle(fontWeight: FontWeight.w700),
                             ),
-                            const SizedBox(width: 10),
+                            const SizedBox(width: 8),
                             SizedBox(
-                              width: 56,
+                              width: 52,
                               child: TextField(
                                 controller: _tempoController,
                                 keyboardType: TextInputType.number,
@@ -1020,75 +1252,82 @@ class _MyHomePageState extends State<MyHomePage> {
                       color: colorScheme.primary.withValues(alpha: 0.30),
                     ),
                   ),
-                  child: Row(
+                  child: Column(
                     children: [
-                      Switch(
-                        value: _lockMeter,
-                        onChanged: (value) {
-                          setState(() => _lockMeter = value);
-                        },
-                      ),
-                      const SizedBox(width: 4),
-                      const Text(
-                        'Meter Lock',
-                        style: TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      const Spacer(),
-                      Switch(
-                        value: _constrainToScale,
-                        onChanged: (value) {
-                          setState(() => _constrainToScale = value);
-                        },
-                      ),
-                      const SizedBox(width: 4),
-                      const Text(
-                        'Key/Scale Constraint',
-                        style: TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(width: 10),
-                      SizedBox(
-                        width: 86,
-                        child: DropdownButtonFormField<String>(
-                          initialValue: _selectedKey,
-                          isDense: true,
-                          decoration: const InputDecoration(
-                            isDense: true,
-                            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                      Row(
+                        children: [
+                          Switch(
+                            value: _lockMeter,
+                            onChanged: (value) {
+                              setState(() => _lockMeter = value);
+                            },
                           ),
-                          items: const [
-                            'C', 'C#', 'D', 'D#', 'E', 'F',
-                            'F#', 'G', 'G#', 'A', 'A#', 'B',
-                          ]
-                              .map((k) => DropdownMenuItem(value: k, child: Text(k)))
-                              .toList(),
-                          onChanged: _constrainToScale
-                              ? (value) {
-                                  if (value == null) return;
-                                  setState(() => _selectedKey = value);
-                                }
-                              : null,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        width: 92,
-                        child: DropdownButtonFormField<String>(
-                          initialValue: _selectedScale,
-                          isDense: true,
-                          decoration: const InputDecoration(
-                            isDense: true,
-                            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          Text(
+                            isNarrowPhone ? 'Meter' : 'Meter Lock',
+                            style: const TextStyle(fontWeight: FontWeight.w700),
                           ),
-                          items: const ['Major', 'Minor']
-                              .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                              .toList(),
-                          onChanged: _constrainToScale
-                              ? (value) {
-                                  if (value == null) return;
-                                  setState(() => _selectedScale = value);
-                                }
-                              : null,
-                        ),
+                          const SizedBox(width: 8),
+                          Switch(
+                            value: _constrainToScale,
+                            onChanged: (value) {
+                              setState(() => _constrainToScale = value);
+                            },
+                          ),
+                          Expanded(
+                            child: Text(
+                              isNarrowPhone ? 'Key/Scale' : 'Key/Scale Constraint',
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              initialValue: _selectedKey,
+                              isDense: true,
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                              ),
+                              items: const [
+                                'C', 'C#', 'D', 'D#', 'E', 'F',
+                                'F#', 'G', 'G#', 'A', 'A#', 'B',
+                              ]
+                                  .map((k) => DropdownMenuItem(value: k, child: Text(k)))
+                                  .toList(),
+                              onChanged: _constrainToScale
+                                  ? (value) {
+                                      if (value == null) return;
+                                      setState(() => _selectedKey = value);
+                                    }
+                                  : null,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              initialValue: _selectedScale,
+                              isDense: true,
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                              ),
+                              items: const ['Major', 'Minor']
+                                  .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                                  .toList(),
+                              onChanged: _constrainToScale
+                                  ? (value) {
+                                      if (value == null) return;
+                                      setState(() => _selectedScale = value);
+                                    }
+                                  : null,
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -1152,6 +1391,10 @@ class _MyHomePageState extends State<MyHomePage> {
                       final isLoading = _loadingSketchId == itemId;
                       final isUploading = item['_is_uploading'] == true;
                       final uploadFailed = item['_upload_failed'] == true;
+                      final job = _conversionJobs[itemId];
+                      final jobActive = job != null &&
+                          (job.status == _ConversionStatus.queued ||
+                              job.status == _ConversionStatus.running);
 
                       return Dismissible(
                         key: Key(itemId.toString()),
@@ -1198,7 +1441,9 @@ class _MyHomePageState extends State<MyHomePage> {
                                   : item['title'],
                             ),
                             subtitle: Text(
-                              item['created_at'].toString().substring(0, 10),
+                              job != null
+                                  ? '${item['created_at'].toString().substring(0, 10)} • ${job.message}'
+                                  : item['created_at'].toString().substring(0, 10),
                             ),
                             trailing: Wrap(
                               spacing: 12, // odstęp między ikonami
@@ -1209,6 +1454,8 @@ class _MyHomePageState extends State<MyHomePage> {
                                     color: Colors.deepPurpleAccent,
                                   ), // Ikona magii
                                   onPressed: isUploading
+                                      ? null
+                                      : jobActive
                                       ? null
                                       : () => convertAudioToMidi(
                                           audioPath,
@@ -1242,6 +1489,8 @@ class _MyHomePageState extends State<MyHomePage> {
                                 ),
                               ],
                             ),
+                            isThreeLine: job != null,
+                            minVerticalPadding: 8,
                           ),
                         ),
                       );
@@ -1801,6 +2050,10 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final screen = MediaQuery.of(context).size;
+    final isCompact = screen.width < 700;
+    final dialogWidth = isCompact ? screen.width * 0.92 : 760.0;
+    final dialogHeight = isCompact ? screen.height * 0.62 : 420.0;
     final minNote = _rollMinNote;
     final maxNote = _rollMaxNote;
     final tickEnd = _notes.isEmpty
@@ -1838,59 +2091,65 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
         child: Focus(
           autofocus: true,
           child: AlertDialog(
+      insetPadding: isCompact
+          ? const EdgeInsets.symmetric(horizontal: 12, vertical: 16)
+          : const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
       title: const Text('Edit MIDI'),
       content: SizedBox(
-        width: 760,
-        height: 420,
+        width: dialogWidth,
+        height: dialogHeight,
         child: Column(
           children: [
-            Row(
-              children: [
-                IconButton(
-                  onPressed: _selectedIndex >= 0 ? _deleteSelected : null,
-                  icon: const Icon(Icons.delete_outline),
-                  tooltip: 'Delete note',
-                ),
-                IconButton(
-                  onPressed: _undoStack.isNotEmpty ? _undo : null,
-                  icon: const Icon(Icons.undo),
-                  tooltip: 'Undo',
-                ),
-                IconButton(
-                  onPressed: _redoStack.isNotEmpty ? _redo : null,
-                  icon: const Icon(Icons.redo),
-                  tooltip: 'Redo',
-                ),
-                const SizedBox(width: 12),
-                DropdownButton<int>(
-                  value: _gridDivider,
-                  items: const [
-                    DropdownMenuItem(value: 4, child: Text('1/4')),
-                    DropdownMenuItem(value: 3, child: Text('1/3')),
-                    DropdownMenuItem(value: 6, child: Text('1/6')),
-                  ],
-                  onChanged: (value) {
-                    if (value == null) return;
-                    setState(() => _gridDivider = value);
-                  },
-                ),
-                const SizedBox(width: 8),
-                IconButton(
-                  onPressed: () => unawaited(_togglePreviewPlayback(tickEnd)),
-                  icon: Icon(_isPreviewPlaying ? Icons.stop : Icons.play_arrow),
-                  tooltip: 'Play/Pause (Space)',
-                ),
-                IconButton(
-                  onPressed: () => unawaited(_rewindPreview()),
-                  icon: const Icon(Icons.replay),
-                  tooltip: 'Rewind to start',
-                ),
-                const SizedBox(width: 4),
-                FilledButton.tonal(
-                  onPressed: _quantizeAll,
-                  child: const Text('Quantize'),
-                ),
-              ],
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  IconButton(
+                    onPressed: _selectedIndex >= 0 ? _deleteSelected : null,
+                    icon: const Icon(Icons.delete_outline),
+                    tooltip: 'Delete note',
+                  ),
+                  IconButton(
+                    onPressed: _undoStack.isNotEmpty ? _undo : null,
+                    icon: const Icon(Icons.undo),
+                    tooltip: 'Undo',
+                  ),
+                  IconButton(
+                    onPressed: _redoStack.isNotEmpty ? _redo : null,
+                    icon: const Icon(Icons.redo),
+                    tooltip: 'Redo',
+                  ),
+                  const SizedBox(width: 12),
+                  DropdownButton<int>(
+                    value: _gridDivider,
+                    items: const [
+                      DropdownMenuItem(value: 4, child: Text('1/4')),
+                      DropdownMenuItem(value: 3, child: Text('1/3')),
+                      DropdownMenuItem(value: 6, child: Text('1/6')),
+                    ],
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() => _gridDivider = value);
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: () => unawaited(_togglePreviewPlayback(tickEnd)),
+                    icon: Icon(_isPreviewPlaying ? Icons.stop : Icons.play_arrow),
+                    tooltip: 'Play/Pause (Space)',
+                  ),
+                  IconButton(
+                    onPressed: () => unawaited(_rewindPreview()),
+                    icon: const Icon(Icons.replay),
+                    tooltip: 'Rewind to start',
+                  ),
+                  const SizedBox(width: 4),
+                  FilledButton.tonal(
+                    onPressed: _quantizeAll,
+                    child: const Text('Quantize'),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 8),
             Expanded(
