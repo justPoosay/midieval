@@ -971,13 +971,10 @@ class _MyHomePageState extends State<MyHomePage> {
     return normalized;
   }
 
-  String _storageMidiFileName({
-    required int sketchId,
-    required String timestamp,
-  }) {
+  String _storageMidiFileName({required int sketchId}) {
     final title = _sketchTitleById(sketchId) ?? 'recording_$sketchId';
     final stem = _storageStemFromTitle(title);
-    return '${stem}_$timestamp.midi';
+    return '$stem.midi';
   }
 
   String? _sketchTitleById(int sketchId) {
@@ -1167,8 +1164,7 @@ class _MyHomePageState extends State<MyHomePage> {
         final recordingIndex = _nextRecordingIndex();
         final title = 'Recording $recordingIndex';
         final fileStem = _storageStemFromTitle(title);
-        final fileName =
-            '${fileStem}_${DateTime.now().millisecondsSinceEpoch}.wav';
+        final fileName = '$fileStem.wav';
         final userId = Supabase.instance.client.auth.currentUser!.id;
         final createdAt = DateTime.now();
         localId = _nextLocalSketchId--;
@@ -1191,7 +1187,10 @@ class _MyHomePageState extends State<MyHomePage> {
             .upload(
               fileName,
               file,
-              fileOptions: const FileOptions(contentType: 'audio/wav'),
+              fileOptions: const FileOptions(
+                contentType: 'audio/wav',
+                upsert: true,
+              ),
             );
 
         // 2. Pobranie Linku
@@ -1574,11 +1573,7 @@ class _MyHomePageState extends State<MyHomePage> {
       }
 
       // 4. Tworzymy unikalną nazwę, żeby uniknąć starych plików w pamięci
-      final String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-      final midiFileName = _storageMidiFileName(
-        sketchId: sketchId,
-        timestamp: timestamp,
-      );
+      final midiFileName = _storageMidiFileName(sketchId: sketchId);
 
       // 5. Upload do Supabase Storage
       await Supabase.instance.client.storage
@@ -1716,11 +1711,7 @@ class _MyHomePageState extends State<MyHomePage> {
             progress: 0.82,
           ),
         );
-        final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-        final midiFileName = _storageMidiFileName(
-          sketchId: request.sketchId,
-          timestamp: timestamp,
-        );
+        final midiFileName = _storageMidiFileName(sketchId: request.sketchId);
         await Supabase.instance.client.storage
             .from('audio-samples')
             .uploadBinary(
@@ -1847,11 +1838,7 @@ class _MyHomePageState extends State<MyHomePage> {
           progress: 0.82,
         ),
       );
-      final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-      final midiFileName = _storageMidiFileName(
-        sketchId: request.sketchId,
-        timestamp: timestamp,
-      );
+      final midiFileName = _storageMidiFileName(sketchId: request.sketchId);
       await Supabase.instance.client.storage
           .from('audio-samples')
           .uploadBinary(
