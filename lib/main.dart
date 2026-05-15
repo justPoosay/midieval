@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import 'package:http/http.dart' as http;
 
@@ -168,23 +169,81 @@ class _MyAppState extends State<MyApp> {
             title: context.tr('app_title'),
             theme: ThemeData(
               brightness: Brightness.dark,
-              colorScheme: ColorScheme.fromSeed(
-                seedColor: const Color(0xFFFFC857),
-                brightness: Brightness.dark,
+              colorScheme: const ColorScheme.dark(
+                primary: Color(0xFF6EE7FF),
+                onPrimary: Color(0xFF05222B),
+                secondary: Color(0xFFC084FC),
+                onSecondary: Color(0xFF2A1742),
+                surface: Color(0xFF131A2B),
+                onSurface: Color(0xFFEAF0FF),
+                onSurfaceVariant: Color(0xFF9FB0D8),
+                outline: Color(0xFF2E3B5C),
+                error: Color(0xFFFF6B7A),
               ),
-              scaffoldBackgroundColor: const Color(0xFF101114),
+              scaffoldBackgroundColor: const Color(0xFF090E1A),
+              textTheme: GoogleFonts.manropeTextTheme(
+                ThemeData.dark().textTheme,
+              ),
               cardTheme: CardThemeData(
-                color: const Color(0xFF1A1C22),
+                color: const Color(0xFF131A2B),
                 elevation: 0,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(18),
                 ),
               ),
               appBarTheme: const AppBarTheme(
                 centerTitle: false,
-                backgroundColor: Color(0xFF101114),
-                foregroundColor: Color(0xFFF5F2EA),
+                backgroundColor: Colors.transparent,
+                foregroundColor: Color(0xFFEAF0FF),
                 elevation: 0,
+              ),
+              inputDecorationTheme: InputDecorationTheme(
+                filled: true,
+                fillColor: const Color(0xFF0F1628),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: const BorderSide(color: Color(0xFF2E3B5C)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: const BorderSide(color: Color(0xFF2E3B5C)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: const BorderSide(
+                    color: Color(0xFF6EE7FF),
+                    width: 1.5,
+                  ),
+                ),
+              ),
+              filledButtonTheme: FilledButtonThemeData(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF6EE7FF),
+                  foregroundColor: const Color(0xFF06212A),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 12,
+                  ),
+                ),
+              ),
+              outlinedButtonTheme: OutlinedButtonThemeData(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFEAF0FF),
+                  side: const BorderSide(color: Color(0xFF3D4E77)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 12,
+                  ),
+                ),
+              ),
+              textButtonTheme: TextButtonThemeData(
+                style: TextButton.styleFrom(shape: const StadiumBorder()),
               ),
               useMaterial3: true,
             ),
@@ -443,11 +502,18 @@ class _ProfileSettingsPageState extends State<ProfileSettingsPage> {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: const Color(0xFF1A1C22),
-              borderRadius: BorderRadius.circular(10),
+              color: const Color(0xFF131A2B),
+              borderRadius: BorderRadius.circular(20),
               border: Border.all(
                 color: colorScheme.primary.withValues(alpha: 0.25),
               ),
+              boxShadow: [
+                BoxShadow(
+                  color: colorScheme.primary.withValues(alpha: 0.10),
+                  blurRadius: 16,
+                  offset: const Offset(0, 8),
+                ),
+              ],
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -490,8 +556,8 @@ class _ProfileSettingsPageState extends State<ProfileSettingsPage> {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: const Color(0xFF1A1C22),
-              borderRadius: BorderRadius.circular(10),
+              color: const Color(0xFF131A2B),
+              borderRadius: BorderRadius.circular(20),
               border: Border.all(
                 color: colorScheme.primary.withValues(alpha: 0.25),
               ),
@@ -536,8 +602,8 @@ class _ProfileSettingsPageState extends State<ProfileSettingsPage> {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: const Color(0xFF1A1C22),
-              borderRadius: BorderRadius.circular(10),
+              color: const Color(0xFF131A2B),
+              borderRadius: BorderRadius.circular(20),
               border: Border.all(
                 color: colorScheme.primary.withValues(alpha: 0.25),
               ),
@@ -1624,9 +1690,9 @@ class _MyHomePageState extends State<MyHomePage> {
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                   colors: [
-                    Color(0xFF0D101A),
-                    Color(0xFF121624),
-                    Color(0xFF1A1426),
+                    Color(0xFF091325),
+                    Color(0xFF1B1A3A),
+                    Color(0xFF102A3E),
                   ],
                 ),
               ),
@@ -1640,11 +1706,12 @@ class _MyHomePageState extends State<MyHomePage> {
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
                   child: Material(
                     color: isRecording
-                        ? const Color(0xFF2A171A)
-                        : const Color(0xFF1A1C22),
-                    borderRadius: BorderRadius.circular(8),
+                        ? const Color(0xFF2B1B24)
+                        : const Color(0xFF131A2B),
+                    borderRadius: BorderRadius.circular(22),
+                    clipBehavior: Clip.antiAlias,
                     child: InkWell(
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(22),
                       onTap: _isSavingRecording
                           ? null
                           : (isRecording ? stopRecording : startRecording),
@@ -1652,12 +1719,21 @@ class _MyHomePageState extends State<MyHomePage> {
                         width: double.infinity,
                         padding: const EdgeInsets.all(18),
                         decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(22),
                           border: Border.all(
                             color: isRecording
                                 ? Colors.redAccent
                                 : colorScheme.primary.withValues(alpha: 0.65),
                           ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: colorScheme.primary.withValues(
+                                alpha: 0.15,
+                              ),
+                              blurRadius: 24,
+                              offset: const Offset(0, 8),
+                            ),
+                          ],
                         ),
                         child: Column(
                           children: [
@@ -1717,14 +1793,20 @@ class _MyHomePageState extends State<MyHomePage> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                   child: Material(
-                    color: const Color(0xFF1A1C22),
-                    borderRadius: BorderRadius.circular(8),
+                    color: const Color(0xFF131A2B),
+                    borderRadius: BorderRadius.circular(20),
+                    clipBehavior: Clip.antiAlias,
                     child: Container(
                       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
                       decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(20),
                         border: Border.all(
                           color: colorScheme.primary.withValues(alpha: 0.30),
+                        ),
+                        gradient: const LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Color(0xFF17213A), Color(0xFF121A2E)],
                         ),
                       ),
                       child: Column(
@@ -1785,6 +1867,10 @@ class _MyHomePageState extends State<MyHomePage> {
                                 onPressed: _openConversionSettingsSheet,
                                 icon: const Icon(Icons.settings_suggest),
                                 label: Text(context.tr('edit_settings')),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: const Color(0xFF273258),
+                                  foregroundColor: const Color(0xFFEAF0FF),
+                                ),
                               ),
                             ],
                           ),
@@ -1882,6 +1968,13 @@ class _MyHomePageState extends State<MyHomePage> {
                             ),
                             child: Card(
                               margin: const EdgeInsets.only(bottom: 8),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(18),
+                                side: const BorderSide(
+                                  color: Color(0xFF263150),
+                                ),
+                              ),
+                              color: const Color(0xFF121A2D),
                               child: ListTile(
                                 contentPadding: const EdgeInsets.symmetric(
                                   horizontal: 14,
@@ -1892,9 +1985,9 @@ class _MyHomePageState extends State<MyHomePage> {
                                   height: 42,
                                   decoration: BoxDecoration(
                                     color: colorScheme.primary.withValues(
-                                      alpha: 0.16,
+                                      alpha: 0.18,
                                     ),
-                                    borderRadius: BorderRadius.circular(8),
+                                    borderRadius: BorderRadius.circular(14),
                                   ),
                                   child: Icon(
                                     Icons.graphic_eq,
@@ -1990,7 +2083,7 @@ class _MyHomePageState extends State<MyHomePage> {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF151925),
+      backgroundColor: const Color(0xFF10182B),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
@@ -2223,7 +2316,7 @@ class _MyHomePageState extends State<MyHomePage> {
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1F2B),
+        color: const Color(0xFF131D33),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: Colors.white10),
       ),
