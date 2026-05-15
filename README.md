@@ -16,6 +16,37 @@ That mismatch causes common errors such as:
 
 MIDieval focuses on reducing that problem by stabilizing pitch detection, filtering unstable fragments, and snapping the result into usable musical notes for MIDI output.
 
+### How The Current Algorithm Works (Short Technical Overview)
+
+The current pipeline is hybrid: Flutter handles recording/workflow/editing, and a local Basic Pitch bridge handles transcription.
+
+1. Audio capture and prep:
+   - The app records mono WAV (44.1 kHz), which avoids extra codec artifacts from compressed formats.
+   - Leading silence and low-energy noise are reduced so pitch detection starts on voiced material.
+
+2. Harmonic handling before transcription:
+   - In the bridge, an optional purification step estimates voice F0 (fundamental) over time.
+   - The signal is then resynthesized into a cleaner monophonic track, which suppresses many distracting overtones.
+   - This is the key defense against “wrong harmonic chosen as note”.
+
+3. Basic Pitch transcription:
+   - The purified (or fallback raw) signal is sent to Basic Pitch, which predicts note events (pitch + start/end).
+   - Output is serialized to MIDI.
+
+4. Post-transcription stabilization:
+   - Very short note fragments are removed.
+   - Neighboring near-unison/semitone wobble fragments are merged.
+   - Micro-notes between stable notes are absorbed when they look like vocal modulation artifacts.
+
+5. Musical normalization in app:
+   - Notes are aligned to start at tick 0 (remove leading timing offset).
+   - Optional constraints can be applied: locked tempo, locked meter, key/scale snapping.
+   - Quantization in the editor uses meter-aware snapping and rhythm regularization for cleaner note lengths.
+
+In practice, this means the app does not rely on a single raw pitch read. It combines purification, ML transcription, and rule-based post-processing to reduce harmonic confusion and produce usable MIDI sketches.
+
+![MIDieval algorithm pipeline](readme/algorithm_pipeline.svg)
+
 ## Features
 
 - Email authentication through Supabase.

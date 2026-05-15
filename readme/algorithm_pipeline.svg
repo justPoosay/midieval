@@ -1,0 +1,198 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="920" viewBox="0 0 1400 920">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#060a15"/>
+      <stop offset="50%" stop-color="#0b1327"/>
+      <stop offset="100%" stop-color="#170f2a"/>
+    </linearGradient>
+
+    <linearGradient id="topLine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3be0ff"/>
+      <stop offset="50%" stop-color="#7d9bff"/>
+      <stop offset="100%" stop-color="#d070ff"/>
+    </linearGradient>
+
+    <linearGradient id="nodeA" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1f2f50"/>
+      <stop offset="100%" stop-color="#18263f"/>
+    </linearGradient>
+    <linearGradient id="nodeB" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#243559"/>
+      <stop offset="100%" stop-color="#1a2944"/>
+    </linearGradient>
+    <linearGradient id="nodeC" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#20345b"/>
+      <stop offset="100%" stop-color="#1a2b49"/>
+    </linearGradient>
+    <linearGradient id="nodeD" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2a345a"/>
+      <stop offset="100%" stop-color="#212847"/>
+    </linearGradient>
+    <linearGradient id="nodeE" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2c3a5d"/>
+      <stop offset="100%" stop-color="#24304d"/>
+    </linearGradient>
+    <linearGradient id="nodeF" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2b3b67"/>
+      <stop offset="100%" stop-color="#223055"/>
+    </linearGradient>
+    <linearGradient id="nodeG" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#30406b"/>
+      <stop offset="100%" stop-color="#27335a"/>
+    </linearGradient>
+
+    <linearGradient id="output" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#16392a"/>
+      <stop offset="100%" stop-color="#1c4a35"/>
+    </linearGradient>
+
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <marker id="arrow" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#9ab2ff"/>
+    </marker>
+
+    <style>
+      .title { font: 700 40px 'Segoe UI', Arial, sans-serif; fill: #f6f8ff; }
+      .subtitle { font: 400 17px 'Segoe UI', Arial, sans-serif; fill: #cdd9ff; }
+      .nodeTitle { font: 700 20px 'Segoe UI', Arial, sans-serif; fill: #eff4ff; }
+      .nodeText { font: 400 14px 'Segoe UI', Arial, sans-serif; fill: #d9e4ff; }
+      .chipText { font: 700 12px 'Segoe UI', Arial, sans-serif; fill: #eaf0ff; letter-spacing: 0.2px; }
+      .flow { fill: none; stroke: #9ab2ff; stroke-width: 2.6; marker-end: url(#arrow); }
+      .outputTitle { font: 700 25px 'Segoe UI', Arial, sans-serif; fill: #edfff2; }
+      .outputText { font: 400 15px 'Segoe UI', Arial, sans-serif; fill: #dbffe5; }
+      .num { font: 700 15px 'Segoe UI', Arial, sans-serif; fill: #eaf0ff; }
+    </style>
+  </defs>
+
+  <rect width="1400" height="920" fill="url(#bg)"/>
+
+  <g opacity="0.22" filter="url(#glow)">
+    <circle cx="160" cy="140" r="130" fill="#2e5ed8"/>
+    <circle cx="1230" cy="170" r="140" fill="#9656ea"/>
+    <circle cx="1160" cy="780" r="170" fill="#3bc9ff"/>
+  </g>
+
+  <text x="700" y="72" text-anchor="middle" class="title">MIDieval Audio to MIDI Pipeline</text>
+  <text x="700" y="102" text-anchor="middle" class="subtitle">Harmonic-aware transcription for cleaner note pitch, timing, and editing</text>
+  <rect x="270" y="124" width="860" height="5" rx="2.5" fill="url(#topLine)"/>
+
+  <!-- Row 1 -->
+  <g transform="translate(66,170)" filter="url(#shadow)">
+    <rect width="300" height="170" rx="20" fill="url(#nodeA)" stroke="#3a568f"/>
+    <circle cx="28" cy="28" r="14" fill="#344b7d" stroke="#7f97d8"/>
+    <text x="28" y="33" text-anchor="middle" class="num">1</text>
+    <text x="50" y="34" class="nodeTitle">Capture</text>
+    <text x="22" y="66" class="nodeText">Mono WAV input at stable sample rate.</text>
+    <text x="22" y="90" class="nodeText">Consistent format reduces decode artifacts.</text>
+    <rect x="22" y="117" width="108" height="28" rx="14" fill="#2d426d"/>
+    <text x="76" y="136" text-anchor="middle" class="chipText">44.1 kHz</text>
+  </g>
+
+  <g transform="translate(390,170)" filter="url(#shadow)">
+    <rect width="300" height="170" rx="20" fill="url(#nodeB)" stroke="#3a568f"/>
+    <circle cx="28" cy="28" r="14" fill="#355184" stroke="#8ba4e8"/>
+    <text x="28" y="33" text-anchor="middle" class="num">2</text>
+    <text x="50" y="34" class="nodeTitle">Signal Prep</text>
+    <text x="22" y="66" class="nodeText">Trim leading silence and gate weak frames.</text>
+    <text x="22" y="90" class="nodeText">Normalize voiced energy for stable analysis.</text>
+    <rect x="22" y="117" width="132" height="28" rx="14" fill="#314a7a"/>
+    <text x="88" y="136" text-anchor="middle" class="chipText">Noise Control</text>
+  </g>
+
+  <g transform="translate(714,170)" filter="url(#shadow)">
+    <rect width="300" height="170" rx="20" fill="url(#nodeC)" stroke="#3a568f"/>
+    <circle cx="28" cy="28" r="14" fill="#35538a" stroke="#8eaaf0"/>
+    <text x="28" y="33" text-anchor="middle" class="num">3</text>
+    <text x="50" y="34" class="nodeTitle">F0 Purification</text>
+    <text x="22" y="66" class="nodeText">Estimate fundamental pitch over time.</text>
+    <text x="22" y="90" class="nodeText">Suppress distracting harmonic overtones.</text>
+    <rect x="22" y="117" width="156" height="28" rx="14" fill="#305082"/>
+    <text x="100" y="136" text-anchor="middle" class="chipText">Fundamental First</text>
+  </g>
+
+  <g transform="translate(1038,170)" filter="url(#shadow)">
+    <rect width="300" height="170" rx="20" fill="url(#nodeD)" stroke="#3a568f"/>
+    <circle cx="28" cy="28" r="14" fill="#3d4d7e" stroke="#a5a3ea"/>
+    <text x="28" y="33" text-anchor="middle" class="num">4</text>
+    <text x="50" y="34" class="nodeTitle">Basic Pitch Bridge</text>
+    <text x="22" y="66" class="nodeText">Model predicts pitch, onset, and offset.</text>
+    <text x="22" y="90" class="nodeText">Returns raw MIDI events for refinement.</text>
+    <rect x="22" y="117" width="112" height="28" rx="14" fill="#394a77"/>
+    <text x="78" y="136" text-anchor="middle" class="chipText">ML Core</text>
+  </g>
+
+  <!-- Row 2 -->
+  <g transform="translate(198,398)" filter="url(#shadow)">
+    <rect width="320" height="190" rx="20" fill="url(#nodeE)" stroke="#3a568f"/>
+    <circle cx="28" cy="28" r="14" fill="#425283" stroke="#a7b7eb"/>
+    <text x="28" y="33" text-anchor="middle" class="num">5</text>
+    <text x="50" y="34" class="nodeTitle">Stabilization Rules</text>
+    <text x="22" y="66" class="nodeText">Remove tiny jitter fragments and flickers.</text>
+    <text x="22" y="90" class="nodeText">Merge near-neighbor semitone wobbles.</text>
+    <text x="22" y="114" class="nodeText">Preserve phrase contour, reduce swerving.</text>
+    <rect x="22" y="140" width="122" height="28" rx="14" fill="#3a4c7a"/>
+    <text x="83" y="159" text-anchor="middle" class="chipText">De-jitter</text>
+  </g>
+
+  <g transform="translate(542,398)" filter="url(#shadow)">
+    <rect width="320" height="190" rx="20" fill="url(#nodeF)" stroke="#3a568f"/>
+    <circle cx="28" cy="28" r="14" fill="#44578e" stroke="#afbef3"/>
+    <text x="28" y="33" text-anchor="middle" class="num">6</text>
+    <text x="50" y="34" class="nodeTitle">Musical Normalization</text>
+    <text x="22" y="66" class="nodeText">Shift phrase to tick zero.</text>
+    <text x="22" y="90" class="nodeText">Apply tempo and meter aware alignment.</text>
+    <text x="22" y="114" class="nodeText">Optional key and scale constraints.</text>
+    <rect x="22" y="140" width="136" height="28" rx="14" fill="#3f5286"/>
+    <text x="90" y="159" text-anchor="middle" class="chipText">Grid Ready</text>
+  </g>
+
+  <g transform="translate(886,398)" filter="url(#shadow)">
+    <rect width="320" height="190" rx="20" fill="url(#nodeG)" stroke="#3a568f"/>
+    <circle cx="28" cy="28" r="14" fill="#495b92" stroke="#bac6f4"/>
+    <text x="28" y="33" text-anchor="middle" class="num">7</text>
+    <text x="50" y="34" class="nodeTitle">Piano Roll Refinement</text>
+    <text x="22" y="66" class="nodeText">Quantize, drag, stretch, or delete notes.</text>
+    <text x="22" y="90" class="nodeText">Manual correction closes the final gap.</text>
+    <text x="22" y="114" class="nodeText">Export polished result as MIDI sketch.</text>
+    <rect x="22" y="140" width="160" height="28" rx="14" fill="#425990"/>
+    <text x="102" y="159" text-anchor="middle" class="chipText">Human in Loop</text>
+  </g>
+
+  <!-- Output -->
+  <g transform="translate(320,656)" filter="url(#shadow)">
+    <rect width="760" height="190" rx="24" fill="url(#output)" stroke="#58af7d"/>
+    <text x="380" y="52" text-anchor="middle" class="outputTitle">Output: Usable MIDI Sketch</text>
+    <text x="380" y="90" text-anchor="middle" class="outputText">Cleaner pitch decisions with fewer harmonic mis-picks.</text>
+    <text x="380" y="118" text-anchor="middle" class="outputText">More stable note lengths and starts for DAW editing.</text>
+    <text x="380" y="146" text-anchor="middle" class="outputText">Fast auto-conversion plus practical human editing control.</text>
+  </g>
+
+  <!-- Connectors row 1 -->
+  <path class="flow" d="M 366 255 L 390 255"/>
+  <path class="flow" d="M 690 255 L 714 255"/>
+  <path class="flow" d="M 1014 255 L 1038 255"/>
+
+  <!-- Drop to row 2 -->
+  <path class="flow" d="M 1188 340 C 1188 372, 1046 372, 1046 398"/>
+  <path class="flow" d="M 214 340 C 214 372, 358 372, 358 398"/>
+
+  <!-- Connectors row 2 -->
+  <path class="flow" d="M 518 493 L 542 493"/>
+  <path class="flow" d="M 862 493 L 886 493"/>
+
+  <!-- Down to output -->
+  <path class="flow" d="M 358 588 C 420 622, 500 636, 580 656"/>
+  <path class="flow" d="M 702 588 L 702 656"/>
+  <path class="flow" d="M 1046 588 C 984 622, 904 636, 824 656"/>
+</svg>
