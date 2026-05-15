@@ -1344,6 +1344,11 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                   const Spacer(),
                   IconButton(
+                    tooltip: "Generate random melody",
+                    onPressed: _generateRandomMelodySketch,
+                    icon: const Icon(Icons.casino_outlined),
+                  ),
+                  IconButton(
                     tooltip: "Refresh",
                     onPressed: _refreshSketches,
                     icon: const Icon(Icons.refresh),
@@ -1551,6 +1556,103 @@ class _MyHomePageState extends State<MyHomePage> {
       'B': 11,
     };
     return mapping[key] ?? 0;
+  }
+
+  Future<void> _generateRandomMelodySketch() async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) return;
+
+      final meter = _parseMeter();
+      final bpm = _lockTempo ? _parseTempoBpm() : 120;
+      final bars = 2;
+      final tpq = 480;
+      final ticksPerBeat = ((tpq * 4) / meter.beatUnit).round().clamp(1, 1 << 30);
+      final totalTicks = ticksPerBeat * meter.beatsPerMeasure * bars;
+
+      final keyPc = _keyNameToPitchClass(_selectedKey);
+      final scale = _selectedScale == 'Minor'
+          ? <int>{0, 2, 3, 5, 7, 8, 10}
+          : <int>{0, 2, 4, 5, 7, 9, 11};
+      final rand = math.Random();
+
+      final notes = <EditableMidiNote>[];
+      var cursor = 0;
+      final allowedDurations = <int>[
+        ticksPerBeat ~/ 2,
+        ticksPerBeat,
+        ticksPerBeat + (ticksPerBeat ~/ 2),
+        ticksPerBeat * 2,
+      ].where((d) => d > 0).toList();
+
+      while (cursor < totalTicks) {
+        final remaining = totalTicks - cursor;
+        var duration = allowedDurations[rand.nextInt(allowedDurations.length)];
+        if (duration > remaining) duration = remaining;
+        if (duration <= 0) break;
+
+        final octave = 4 + rand.nextInt(2); // 4..5
+        final pitchClass = scale.elementAt(rand.nextInt(scale.length));
+        final midi = ((octave + 1) * 12) + ((keyPc + pitchClass) % 12);
+
+        notes.add(
+          EditableMidiNote(
+            note: midi.clamp(0, 127),
+            startTick: cursor,
+            durationTicks: duration,
+            velocity: 88 + rand.nextInt(28),
+          ),
+        );
+
+        cursor += duration;
+      }
+
+      final parsed = ParsedMidi(
+        ticksPerQuarter: tpq,
+        tempoBpm: bpm,
+        beatsPerMeasure: meter.beatsPerMeasure,
+        beatUnit: meter.beatUnit,
+        notes: const [],
+      );
+      final midiBytes = parsed.rebuild(
+        notes,
+        tempoOverrideBpm: bpm,
+        beatsPerMeasureOverride: meter.beatsPerMeasure,
+        beatUnitOverride: meter.beatUnit,
+      );
+
+      final ts = DateTime.now().millisecondsSinceEpoch.toString();
+      final midiFileName = "random_melody_$ts.midi";
+      await Supabase.instance.client.storage
+          .from('audio-samples')
+          .uploadBinary(
+            midiFileName,
+            midiBytes,
+            fileOptions: const FileOptions(contentType: 'audio/midi', upsert: true),
+          );
+      final midiUrl = Supabase.instance.client.storage
+          .from('audio-samples')
+          .getPublicUrl(midiFileName);
+
+      await Supabase.instance.client.from('sketches').insert({
+        'user_id': user.id,
+        'title': '🎲 Random $_selectedKey $_selectedScale',
+        'audio_path': midiUrl,
+      });
+
+      if (mounted) {
+        _refreshSketches();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Random melody generated')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Random melody failed: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 }
 
