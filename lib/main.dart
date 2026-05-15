@@ -12,7 +12,6 @@ import 'package:audioplayers/audioplayers.dart';
 
 import 'package:http/http.dart' as http;
 
-
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -26,34 +25,173 @@ void main() async {
   runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+enum AppLanguage { en, pl }
+
+class AppLocalizationScope
+    extends InheritedNotifier<ValueNotifier<AppLanguage>> {
+  const AppLocalizationScope({
+    super.key,
+    required ValueNotifier<AppLanguage> notifier,
+    required super.child,
+  }) : super(notifier: notifier);
+
+  static ValueNotifier<AppLanguage> notifierOf(BuildContext context) {
+    final scope = context
+        .dependOnInheritedWidgetOfExactType<AppLocalizationScope>();
+    assert(scope != null, 'AppLocalizationScope not found in widget tree');
+    return scope!.notifier!;
+  }
+
+  static AppLanguage languageOf(BuildContext context) =>
+      notifierOf(context).value;
+
+  static void setLanguage(BuildContext context, AppLanguage language) {
+    notifierOf(context).value = language;
+  }
+}
+
+class AppStrings {
+  static const Map<String, String> _en = {
+    'app_title': 'MIDieval',
+    'auth_subtitle': 'Sign in to create melody sketches',
+    'email': 'Email',
+    'password': 'Password',
+    'sign_in': 'Sign In',
+    'sign_up': 'Sign Up',
+    'registered': 'Registered! Check your email.',
+    'error_prefix': 'Error',
+    'settings': 'Settings',
+    'logout': 'Logout',
+    'profile_settings': 'Profile and Settings',
+    'username': 'Username',
+    'save_username': 'Save Username',
+    'new_password': 'New Password',
+    'confirm_password': 'Confirm Password',
+    'change_password': 'Change Password',
+    'language': 'Language',
+    'english': 'English',
+    'polish': 'Polish',
+    'password_mismatch': 'Passwords do not match.',
+    'password_too_short': 'Password must be at least 6 characters.',
+    'username_saved': 'Username updated.',
+    'password_saved': 'Password updated.',
+    'record_melody': 'Record a melody',
+    'tap_to_stop': 'Tap to stop and save',
+    'saving_clip': 'Saving clip...',
+    'hum_prompt': 'Hum or sing a short phrase',
+    'settings_card': 'Conversion Settings',
+    'open': 'Open',
+    'edit_settings': 'Edit Settings',
+    'tempo_auto': 'Tempo: auto-detect',
+    'meter_auto': 'Meter: auto-detect',
+    'scale_off': 'Key/Scale: unconstrained',
+    'sketches': 'Sketches',
+    'no_sketches': 'No sketches yet',
+  };
+
+  static const Map<String, String> _pl = {
+    'app_title': 'MIDieval',
+    'auth_subtitle': 'Zaloguj sie, aby tworzyc szkice melodii',
+    'email': 'Email',
+    'password': 'Haslo',
+    'sign_in': 'Wejdz',
+    'sign_up': 'Dolacz',
+    'registered': 'Zarejestrowano! Sprawdz email.',
+    'error_prefix': 'Blad',
+    'settings': 'Ustawienia',
+    'logout': 'Wyloguj',
+    'profile_settings': 'Profil i Ustawienia',
+    'username': 'Nazwa uzytkownika',
+    'save_username': 'Zapisz nazwe',
+    'new_password': 'Nowe haslo',
+    'confirm_password': 'Potwierdz haslo',
+    'change_password': 'Zmien haslo',
+    'language': 'Jezyk',
+    'english': 'Angielski',
+    'polish': 'Polski',
+    'password_mismatch': 'Hasla nie sa takie same.',
+    'password_too_short': 'Haslo musi miec min. 6 znakow.',
+    'username_saved': 'Nazwa uzytkownika zaktualizowana.',
+    'password_saved': 'Haslo zaktualizowane.',
+    'record_melody': 'Nagraj melodie',
+    'tap_to_stop': 'Dotknij, aby zatrzymac i zapisac',
+    'saving_clip': 'Zapisywanie klipu...',
+    'hum_prompt': 'Nuc lub spiewaj krotka fraze',
+    'settings_card': 'Ustawienia Konwersji',
+    'open': 'Otworz',
+    'edit_settings': 'Edytuj ustawienia',
+    'tempo_auto': 'Tempo: auto-detekcja',
+    'meter_auto': 'Metrum: auto-detekcja',
+    'scale_off': 'Tonacja/Skala: bez ograniczen',
+    'sketches': 'Szkice',
+    'no_sketches': 'Brak szkicow',
+  };
+
+  static String of(BuildContext context, String key) {
+    final language = AppLocalizationScope.languageOf(context);
+    final table = language == AppLanguage.pl ? _pl : _en;
+    return table[key] ?? _en[key] ?? key;
+  }
+}
+
+extension AppTr on BuildContext {
+  String tr(String key) => AppStrings.of(this, key);
+}
+
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
   @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  final ValueNotifier<AppLanguage> _language = ValueNotifier<AppLanguage>(
+    AppLanguage.en,
+  );
+
+  @override
+  void dispose() {
+    _language.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'MIDieval',
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFFFFC857),
-          brightness: Brightness.dark,
-        ),
-        scaffoldBackgroundColor: const Color(0xFF101114),
-        cardTheme: CardThemeData(
-          color: const Color(0xFF1A1C22),
-          elevation: 0,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        ),
-        appBarTheme: const AppBarTheme(
-          centerTitle: false,
-          backgroundColor: Color(0xFF101114),
-          foregroundColor: Color(0xFFF5F2EA),
-          elevation: 0,
-        ),
-        useMaterial3: true,
+    return AppLocalizationScope(
+      notifier: _language,
+      child: ValueListenableBuilder<AppLanguage>(
+        valueListenable: _language,
+        builder: (context, language, _) {
+          return MaterialApp(
+            locale: Locale(language == AppLanguage.pl ? 'pl' : 'en'),
+            title: context.tr('app_title'),
+            theme: ThemeData(
+              brightness: Brightness.dark,
+              colorScheme: ColorScheme.fromSeed(
+                seedColor: const Color(0xFFFFC857),
+                brightness: Brightness.dark,
+              ),
+              scaffoldBackgroundColor: const Color(0xFF101114),
+              cardTheme: CardThemeData(
+                color: const Color(0xFF1A1C22),
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              appBarTheme: const AppBarTheme(
+                centerTitle: false,
+                backgroundColor: Color(0xFF101114),
+                foregroundColor: Color(0xFFF5F2EA),
+                elevation: 0,
+              ),
+              useMaterial3: true,
+            ),
+            home: const AuthCheck(),
+          );
+        },
       ),
-      home: const AuthCheck(),
     );
   }
 }
@@ -192,10 +330,253 @@ class _AuthScreenState extends State<AuthScreen> {
       ),
     );
   }
-
 }
 
 // --- GŁÓWNY EKRAN APLIKACJI ---
+class ProfileSettingsPage extends StatefulWidget {
+  const ProfileSettingsPage({super.key});
+
+  @override
+  State<ProfileSettingsPage> createState() => _ProfileSettingsPageState();
+}
+
+class _ProfileSettingsPageState extends State<ProfileSettingsPage> {
+  final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _newPasswordController = TextEditingController();
+  final TextEditingController _confirmPasswordController =
+      TextEditingController();
+  bool _savingUsername = false;
+  bool _savingPassword = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final user = Supabase.instance.client.auth.currentUser;
+    final metadataName = user?.userMetadata?['username']?.toString();
+    final fallback = user?.email?.split('@').first ?? '';
+    _usernameController.text = (metadataName?.isNotEmpty ?? false)
+        ? metadataName!
+        : fallback;
+  }
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _newPasswordController.dispose();
+    _confirmPasswordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveUsername() async {
+    final name = _usernameController.text.trim();
+    if (name.isEmpty) return;
+    setState(() => _savingUsername = true);
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      final data = <String, dynamic>{...(user?.userMetadata ?? {})};
+      data['username'] = name;
+      await Supabase.instance.client.auth.updateUser(
+        UserAttributes(data: data),
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(context.tr('username_saved'))));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${context.tr('error_prefix')}: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _savingUsername = false);
+    }
+  }
+
+  Future<void> _changePassword() async {
+    final pass = _newPasswordController.text;
+    final confirm = _confirmPasswordController.text;
+    if (pass.length < 6) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(context.tr('password_too_short'))));
+      return;
+    }
+    if (pass != confirm) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(context.tr('password_mismatch'))));
+      return;
+    }
+
+    setState(() => _savingPassword = true);
+    try {
+      await Supabase.instance.client.auth.updateUser(
+        UserAttributes(password: pass),
+      );
+      if (!mounted) return;
+      _newPasswordController.clear();
+      _confirmPasswordController.clear();
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(context.tr('password_saved'))));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${context.tr('error_prefix')}: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _savingPassword = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final currentLanguage = AppLocalizationScope.languageOf(context);
+    final email = Supabase.instance.client.auth.currentUser?.email ?? '-';
+
+    return Scaffold(
+      appBar: AppBar(title: Text(context.tr('profile_settings'))),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1C22),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: colorScheme.primary.withValues(alpha: 0.25),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  context.tr('email'),
+                  style: TextStyle(color: colorScheme.onSurfaceVariant),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  email,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _usernameController,
+                  decoration: InputDecoration(
+                    labelText: context.tr('username'),
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: _savingUsername ? null : _saveUsername,
+                    child: _savingUsername
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Text(context.tr('save_username')),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1C22),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: colorScheme.primary.withValues(alpha: 0.25),
+              ),
+            ),
+            child: Column(
+              children: [
+                TextField(
+                  controller: _newPasswordController,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    labelText: context.tr('new_password'),
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _confirmPasswordController,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    labelText: context.tr('confirm_password'),
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.tonal(
+                    onPressed: _savingPassword ? null : _changePassword,
+                    child: _savingPassword
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Text(context.tr('change_password')),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1C22),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: colorScheme.primary.withValues(alpha: 0.25),
+              ),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    context.tr('language'),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                DropdownButton<AppLanguage>(
+                  value: currentLanguage,
+                  items: [
+                    DropdownMenuItem(
+                      value: AppLanguage.en,
+                      child: Text(context.tr('english')),
+                    ),
+                    DropdownMenuItem(
+                      value: AppLanguage.pl,
+                      child: Text(context.tr('polish')),
+                    ),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) return;
+                    AppLocalizationScope.setLanguage(context, value);
+                    setState(() {});
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key});
 
@@ -261,7 +642,8 @@ class _MyHomePageState extends State<MyHomePage> {
   String _selectedKey = 'C';
   String _selectedScale = 'Major';
   bool _isGeneratingMidiPreview = false;
-  final Queue<_ConversionRequest> _conversionQueue = Queue<_ConversionRequest>();
+  final Queue<_ConversionRequest> _conversionQueue =
+      Queue<_ConversionRequest>();
   final Map<int, _ConversionJobState> _conversionJobs = {};
   bool _isProcessingConversionQueue = false;
 
@@ -414,7 +796,9 @@ class _MyHomePageState extends State<MyHomePage> {
           _recordingElapsed = Duration.zero;
         });
         _recordingTicker?.cancel();
-        _recordingTicker = Timer.periodic(const Duration(milliseconds: 200), (_) {
+        _recordingTicker = Timer.periodic(const Duration(milliseconds: 200), (
+          _,
+        ) {
           if (!mounted || !isRecording || _recordingStartedAt == null) return;
           setState(() {
             _recordingElapsed = DateTime.now().difference(_recordingStartedAt!);
@@ -542,7 +926,9 @@ class _MyHomePageState extends State<MyHomePage> {
     }
     final response = await http.get(Uri.parse(audioUrl));
     if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
-      throw Exception('Could not download audio for playback (${response.statusCode})');
+      throw Exception(
+        'Could not download audio for playback (${response.statusCode})',
+      );
     }
     final ext = audioUrl.toLowerCase().contains('.wav') ? 'wav' : 'bin';
     final dir = await getTemporaryDirectory();
@@ -552,6 +938,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _playbackCacheByUrl[audioUrl] = localPath;
     return localPath;
   }
+
   Future<void> playOrStopSketch(int sketchId, String audioUrl) async {
     try {
       if (_playingSketchId == sketchId) {
@@ -685,19 +1072,20 @@ class _MyHomePageState extends State<MyHomePage> {
     final bridgeHost = Platform.isAndroid
         ? _basicPitchBridgeHostAndroidEmulator
         : _basicPitchBridgeHostDesktop;
-    final request = http.MultipartRequest(
-      'POST',
-      Uri.parse('http://$bridgeHost:8090/audio-to-midi'),
-    )
-      ..fields['audio_filename'] = 'input.wav'
-      ..fields['purify_audio'] = 'true'
-      ..files.add(
-        http.MultipartFile.fromBytes(
-          'audio_file',
-          audioBytes,
-          filename: 'input.wav',
-        ),
-      );
+    final request =
+        http.MultipartRequest(
+            'POST',
+            Uri.parse('http://$bridgeHost:8090/audio-to-midi'),
+          )
+          ..fields['audio_filename'] = 'input.wav'
+          ..fields['purify_audio'] = 'true'
+          ..files.add(
+            http.MultipartFile.fromBytes(
+              'audio_file',
+              audioBytes,
+              filename: 'input.wav',
+            ),
+          );
 
     final response = await request.send();
     final responseBytes = await response.stream.toBytes();
@@ -823,6 +1211,7 @@ class _MyHomePageState extends State<MyHomePage> {
       }
     }
   }
+
   void _enqueueConversionJob(int sketchId, String audioUrl) {
     final active = _conversionJobs[sketchId];
     if (active != null &&
@@ -836,7 +1225,9 @@ class _MyHomePageState extends State<MyHomePage> {
         message: 'Queued',
         progress: 0.0,
       );
-      _conversionQueue.add(_ConversionRequest(sketchId: sketchId, audioUrl: audioUrl));
+      _conversionQueue.add(
+        _ConversionRequest(sketchId: sketchId, audioUrl: audioUrl),
+      );
     });
     unawaited(_processConversionQueue());
   }
@@ -907,7 +1298,10 @@ class _MyHomePageState extends State<MyHomePage> {
             .uploadBinary(
               midiFileName,
               editedMidiBytes,
-              fileOptions: const FileOptions(contentType: 'audio/midi', upsert: true),
+              fileOptions: const FileOptions(
+                contentType: 'audio/midi',
+                upsert: true,
+              ),
             );
         final midiUrl = Supabase.instance.client.storage
             .from('audio-samples')
@@ -1015,7 +1409,10 @@ class _MyHomePageState extends State<MyHomePage> {
           .uploadBinary(
             midiFileName,
             processedMidiBytes,
-            fileOptions: const FileOptions(contentType: 'audio/midi', upsert: true),
+            fileOptions: const FileOptions(
+              contentType: 'audio/midi',
+              upsert: true,
+            ),
           );
       final midiUrl = Supabase.instance.client.storage
           .from('audio-samples')
@@ -1123,7 +1520,6 @@ class _MyHomePageState extends State<MyHomePage> {
     setState(() => _conversionJobs[sketchId] = state);
   }
 
-
   Future<Uint8List?> _openMidiEditor(
     Uint8List midiBytes, {
     int? tempoOverrideBpm,
@@ -1185,16 +1581,28 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final isNarrowPhone = MediaQuery.of(context).size.width < 420;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          "MIDieval",
-          style: TextStyle(fontWeight: FontWeight.w800),
+        title: Text(
+          context.tr('app_title'),
+          style: const TextStyle(fontWeight: FontWeight.w800),
         ),
         actions: [
           IconButton(
+            tooltip: context.tr('settings'),
+            icon: const Icon(Icons.settings),
+            onPressed: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const ProfileSettingsPage()),
+              );
+              if (mounted) {
+                setState(() {});
+              }
+            },
+          ),
+          IconButton(
+            tooltip: context.tr('logout'),
             icon: const Icon(Icons.logout),
             onPressed: () async {
               await Supabase.instance.client.auth.signOut();
@@ -1209,435 +1617,360 @@ class _MyHomePageState extends State<MyHomePage> {
       ),
       body: Stack(
         children: [
-          SafeArea(
-            child: Column(
-          children: [
-            // PANEL NAGRYWANIA
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-              child: Material(
-                color: isRecording
-                    ? const Color(0xFF2A171A)
-                    : const Color(0xFF1A1C22),
-                borderRadius: BorderRadius.circular(8),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(8),
-                  onTap: _isSavingRecording
-                      ? null
-                      : (isRecording ? stopRecording : startRecording),
-                  child: Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(18),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: isRecording
-                            ? Colors.redAccent
-                            : colorScheme.primary.withValues(alpha: 0.65),
-                      ),
-                    ),
-                    child: Column(
-                      children: [
-                        Icon(
-                          isRecording ? Icons.stop_circle : Icons.mic,
-                          size: 48,
-                          color: isRecording
-                              ? Colors.redAccent
-                              : colorScheme.primary,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _isSavingRecording
-                              ? "Saving clip..."
-                              : isRecording
-                              ? "Tap to stop and save"
-                              : "Record a melody",
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          _isSavingRecording
-                              ? "Uploading recording to Supabase"
-                              : isRecording
-                              ? "Saving as a 44.1 kHz WAV clip"
-                              : "Hum or sing a short phrase",
-                          style: TextStyle(color: colorScheme.onSurfaceVariant),
-                        ),
-                        if (isRecording) ...[
-                          const SizedBox(height: 6),
-                          Text(
-                            _formatDuration(_recordingElapsed),
-                            style: TextStyle(
-                              color: colorScheme.primary,
-                              fontWeight: FontWeight.w800,
-                              fontFeatures: const [FontFeature.tabularFigures()],
-                            ),
-                          ),
-                        ],
-                        if (_isSavingRecording) ...[
-                          const SizedBox(height: 10),
-                          const LinearProgressIndicator(minHeight: 3),
-                        ],
-                      ],
-                    ),
-                  ),
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(0xFF0D101A),
+                    Color(0xFF121624),
+                    Color(0xFF1A1426),
+                  ],
                 ),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Material(
-                color: const Color(0xFF1A1C22),
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                  decoration: BoxDecoration(
+          ),
+          SafeArea(
+            child: Column(
+              children: [
+                // PANEL NAGRYWANIA
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+                  child: Material(
+                    color: isRecording
+                        ? const Color(0xFF2A171A)
+                        : const Color(0xFF1A1C22),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: colorScheme.primary.withValues(alpha: 0.30),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      SizedBox(
-                        width: 46,
-                        child: TextField(
-                          controller: _timeSigTopController,
-                          keyboardType: TextInputType.number,
-                          enabled: _lockMeter,
-                          textAlign: TextAlign.center,
-                          decoration: const InputDecoration(
-                            isDense: true,
-                            contentPadding: EdgeInsets.symmetric(vertical: 8),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: _isSavingRecording
+                          ? null
+                          : (isRecording ? stopRecording : startRecording),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(18),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: isRecording
+                                ? Colors.redAccent
+                                : colorScheme.primary.withValues(alpha: 0.65),
                           ),
                         ),
-                      ),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 6),
-                        child: Text('/'),
-                      ),
-                      SizedBox(
-                        width: 46,
-                        child: TextField(
-                          controller: _timeSigBottomController,
-                          keyboardType: TextInputType.number,
-                          enabled: _lockMeter,
-                          textAlign: TextAlign.center,
-                          decoration: const InputDecoration(
-                            isDense: true,
-                            contentPadding: EdgeInsets.symmetric(vertical: 8),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
+                        child: Column(
                           children: [
-                            Switch(
-                              value: _lockTempo,
-                              onChanged: (value) {
-                                setState(() => _lockTempo = value);
-                              },
+                            Icon(
+                              isRecording ? Icons.stop_circle : Icons.mic,
+                              size: 48,
+                              color: isRecording
+                                  ? Colors.redAccent
+                                  : colorScheme.primary,
                             ),
-                            const SizedBox(width: 4),
+                            const SizedBox(height: 8),
                             Text(
-                              isNarrowPhone ? 'Tempo' : 'Tempo Lock',
-                              style: const TextStyle(fontWeight: FontWeight.w700),
-                            ),
-                            const SizedBox(width: 8),
-                            SizedBox(
-                              width: 52,
-                              child: TextField(
-                                controller: _tempoController,
-                                keyboardType: TextInputType.number,
-                                enabled: _lockTempo,
-                                textAlign: TextAlign.center,
-                                decoration: const InputDecoration(
-                                  isDense: true,
-                                  contentPadding: EdgeInsets.symmetric(vertical: 8),
-                                ),
+                              _isSavingRecording
+                                  ? context.tr('saving_clip')
+                                  : isRecording
+                                  ? context.tr('tap_to_stop')
+                                  : context.tr('record_melody'),
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
                               ),
                             ),
-                            const SizedBox(width: 6),
-                            const Text('BPM'),
+                            const SizedBox(height: 4),
+                            Text(
+                              _isSavingRecording
+                                  ? "Uploading recording to Supabase"
+                                  : isRecording
+                                  ? "Saving as a 44.1 kHz WAV clip"
+                                  : context.tr('hum_prompt'),
+                              style: TextStyle(
+                                color: colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            if (isRecording) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                _formatDuration(_recordingElapsed),
+                                style: TextStyle(
+                                  color: colorScheme.primary,
+                                  fontWeight: FontWeight.w800,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            if (_isSavingRecording) ...[
+                              const SizedBox(height: 10),
+                              const LinearProgressIndicator(minHeight: 3),
+                            ],
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Material(
-                color: const Color(0xFF1A1C22),
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: colorScheme.primary.withValues(alpha: 0.30),
                     ),
                   ),
-                  child: Column(
-                    children: [
-                      Row(
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Material(
+                    color: const Color(0xFF1A1C22),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: colorScheme.primary.withValues(alpha: 0.30),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Switch(
-                            value: _lockMeter,
-                            onChanged: (value) {
-                              setState(() => _lockMeter = value);
-                            },
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.tune,
+                                size: 18,
+                                color: colorScheme.primary,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                context.tr('settings_card'),
+                                style: TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                              const Spacer(),
+                              TextButton.icon(
+                                onPressed: _openConversionSettingsSheet,
+                                icon: const Icon(Icons.open_in_full, size: 16),
+                                label: Text(context.tr('open')),
+                              ),
+                            ],
                           ),
+                          const SizedBox(height: 8),
                           Text(
-                            isNarrowPhone ? 'Meter' : 'Meter Lock',
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          const SizedBox(width: 8),
-                          Switch(
-                            value: _constrainToScale,
-                            onChanged: (value) {
-                              setState(() => _constrainToScale = value);
-                            },
-                          ),
-                          Expanded(
-                            child: Text(
-                              isNarrowPhone ? 'Key/Scale' : 'Key/Scale Constraint',
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontWeight: FontWeight.w700),
+                            _lockTempo
+                                ? 'Tempo: ${_parseTempoBpm()} BPM (locked)'
+                                : context.tr('tempo_auto'),
+                            style: TextStyle(
+                              color: colorScheme.onSurfaceVariant,
                             ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _lockMeter
+                                ? 'Meter: ${_parseMeter().beatsPerMeasure}/${_parseMeter().beatUnit} (locked)'
+                                : context.tr('meter_auto'),
+                            style: TextStyle(
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _constrainToScale
+                                ? 'Key/Scale: $_selectedKey $_selectedScale'
+                                : context.tr('scale_off'),
+                            style: TextStyle(
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              FilledButton.tonalIcon(
+                                onPressed: _openConversionSettingsSheet,
+                                icon: const Icon(Icons.settings_suggest),
+                                label: Text(context.tr('edit_settings')),
+                              ),
+                            ],
                           ),
                         ],
                       ),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: DropdownButtonFormField<String>(
-                              initialValue: _selectedKey,
-                              isDense: true,
-                              decoration: const InputDecoration(
-                                isDense: true,
-                                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                              ),
-                              items: const [
-                                'C', 'C#', 'D', 'D#', 'E', 'F',
-                                'F#', 'G', 'G#', 'A', 'A#', 'B',
-                              ]
-                                  .map((k) => DropdownMenuItem(value: k, child: Text(k)))
-                                  .toList(),
-                              onChanged: _constrainToScale
-                                  ? (value) {
-                                      if (value == null) return;
-                                      setState(() => _selectedKey = value);
-                                    }
-                                  : null,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: DropdownButtonFormField<String>(
-                              initialValue: _selectedScale,
-                              isDense: true,
-                              decoration: const InputDecoration(
-                                isDense: true,
-                                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                              ),
-                              items: const ['Major', 'Minor']
-                                  .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                                  .toList(),
-                              onChanged: _constrainToScale
-                                  ? (value) {
-                                      if (value == null) return;
-                                      setState(() => _selectedScale = value);
-                                    }
-                                  : null,
-                            ),
-                          ),
-                        ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Row(
+                    children: [
+                      Text(
+                        context.tr('sketches'),
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        tooltip: "Generate random melody",
+                        onPressed: _generateRandomMelodySketch,
+                        icon: const Icon(Icons.casino_outlined),
+                      ),
+                      IconButton(
+                        tooltip: "Refresh",
+                        onPressed: _refreshSketches,
+                        icon: const Icon(Icons.refresh),
                       ),
                     ],
                   ),
                 ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Row(
-                children: [
-                  const Text(
-                    "Sketches",
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    tooltip: "Generate random melody",
-                    onPressed: _generateRandomMelodySketch,
-                    icon: const Icon(Icons.casino_outlined),
-                  ),
-                  IconButton(
-                    tooltip: "Refresh",
-                    onPressed: _refreshSketches,
-                    icon: const Icon(Icons.refresh),
-                  ),
-                ],
-              ),
-            ),
-            // LISTA
-            Expanded(
-              child: FutureBuilder<List<Map<String, dynamic>>>(
-                future: _sketchesFuture,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  final sketches = snapshot.data ?? [];
-                  if (sketches.isEmpty) {
-                    return Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.library_music,
-                            size: 48,
-                            color: colorScheme.onSurfaceVariant,
+                // LISTA
+                Expanded(
+                  child: FutureBuilder<List<Map<String, dynamic>>>(
+                    future: _sketchesFuture,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      final sketches = snapshot.data ?? [];
+                      if (sketches.isEmpty) {
+                        return Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.library_music,
+                                size: 48,
+                                color: colorScheme.onSurfaceVariant,
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                context.tr('no_sketches'),
+                                style: TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 12),
-                          const Text(
-                            "No sketches yet",
-                            style: TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                        ],
-                      ),
-                    );
-                  }
+                        );
+                      }
 
-                  return ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-                    itemCount: sketches.length,
-                    itemBuilder: (context, index) {
-                      final item = sketches[index];
-                      final itemId = item['id'] as int;
-                      final audioPath = item['audio_path'] as String;
-                      final isPlaying = _playingSketchId == itemId;
-                      final isLoading = _loadingSketchId == itemId;
-                      final isUploading = item['_is_uploading'] == true;
-                      final uploadFailed = item['_upload_failed'] == true;
-                      final job = _conversionJobs[itemId];
-                      final jobActive = job != null &&
-                          (job.status == _ConversionStatus.queued ||
-                              job.status == _ConversionStatus.running);
+                      return ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+                        itemCount: sketches.length,
+                        itemBuilder: (context, index) {
+                          final item = sketches[index];
+                          final itemId = item['id'] as int;
+                          final audioPath = item['audio_path'] as String;
+                          final isPlaying = _playingSketchId == itemId;
+                          final isLoading = _loadingSketchId == itemId;
+                          final isUploading = item['_is_uploading'] == true;
+                          final uploadFailed = item['_upload_failed'] == true;
+                          final job = _conversionJobs[itemId];
+                          final jobActive =
+                              job != null &&
+                              (job.status == _ConversionStatus.queued ||
+                                  job.status == _ConversionStatus.running);
 
-                      return Dismissible(
-                        key: Key(itemId.toString()),
-                        direction: DismissDirection.endToStart,
-                        onDismissed: (_) => deleteSketch(itemId, audioPath),
-                        background: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.redAccent.withValues(alpha: 0.22),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          alignment: Alignment.centerRight,
-                          padding: const EdgeInsets.only(right: 20),
-                          child: const Icon(
-                            Icons.delete_outline,
-                            color: Colors.redAccent,
-                          ),
-                        ),
-                        child: Card(
-                          margin: const EdgeInsets.only(bottom: 8),
-                          child: ListTile(
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 6,
-                            ),
-                            leading: Container(
-                              width: 42,
-                              height: 42,
+                          return Dismissible(
+                            key: Key(itemId.toString()),
+                            direction: DismissDirection.endToStart,
+                            onDismissed: (_) => deleteSketch(itemId, audioPath),
+                            background: Container(
                               decoration: BoxDecoration(
-                                color: colorScheme.primary.withValues(
-                                  alpha: 0.16,
-                                ),
+                                color: Colors.redAccent.withValues(alpha: 0.22),
                                 borderRadius: BorderRadius.circular(8),
                               ),
-                              child: Icon(
-                                Icons.graphic_eq,
-                                color: colorScheme.primary,
+                              alignment: Alignment.centerRight,
+                              padding: const EdgeInsets.only(right: 20),
+                              child: const Icon(
+                                Icons.delete_outline,
+                                color: Colors.redAccent,
                               ),
                             ),
-                            title: Text(
-                              isUploading
-                                  ? '${item['title']} (uploading...)'
-                                  : uploadFailed
-                                  ? '${item['title']} (local only)'
-                                  : item['title'],
-                            ),
-                            subtitle: Text(
-                              job != null
-                                  ? '${item['created_at'].toString().substring(0, 10)} • ${job.message}'
-                                  : item['created_at'].toString().substring(0, 10),
-                            ),
-                            trailing: Wrap(
-                              spacing: 12, // odstęp między ikonami
-                              children: [
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.auto_awesome,
-                                    color: Colors.deepPurpleAccent,
-                                  ), // Ikona magii
-                                  onPressed: isUploading
-                                      ? null
-                                      : jobActive
-                                      ? null
-                                      : () => convertAudioToMidi(
-                                          audioPath,
-                                          itemId,
-                                        ),
-                                  tooltip: "Konwertuj na MIDI",
+                            child: Card(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              child: ListTile(
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 6,
                                 ),
-                                IconButton(
-                                  icon: isLoading
-                                      ? SizedBox(
-                                          width: 20,
-                                          height: 20,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2.4,
-                                            color: colorScheme.primary,
-                                          ),
-                                        )
-                                      : Icon(
-                                          isPlaying
-                                              ? Icons.stop_circle
-                                              : Icons.play_arrow,
-                                          color: isPlaying
-                                              ? Colors.redAccent
-                                              : colorScheme.primary,
-                                        ),
-                                  onPressed: () =>
-                                      playOrStopSketch(itemId, audioPath),
-                                  tooltip: isPlaying
-                                      ? "Zatrzymaj odtwarzanie"
-                                      : "Odtwórz klip",
+                                leading: Container(
+                                  width: 42,
+                                  height: 42,
+                                  decoration: BoxDecoration(
+                                    color: colorScheme.primary.withValues(
+                                      alpha: 0.16,
+                                    ),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Icon(
+                                    Icons.graphic_eq,
+                                    color: colorScheme.primary,
+                                  ),
                                 ),
-                              ],
+                                title: Text(
+                                  isUploading
+                                      ? '${item['title']} (uploading...)'
+                                      : uploadFailed
+                                      ? '${item['title']} (local only)'
+                                      : item['title'],
+                                ),
+                                subtitle: Text(
+                                  job != null
+                                      ? '${item['created_at'].toString().substring(0, 10)} • ${job.message}'
+                                      : item['created_at'].toString().substring(
+                                          0,
+                                          10,
+                                        ),
+                                ),
+                                trailing: Wrap(
+                                  spacing: 12, // odstęp między ikonami
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(
+                                        Icons.auto_awesome,
+                                        color: Colors.deepPurpleAccent,
+                                      ), // Ikona magii
+                                      onPressed: isUploading
+                                          ? null
+                                          : jobActive
+                                          ? null
+                                          : () => convertAudioToMidi(
+                                              audioPath,
+                                              itemId,
+                                            ),
+                                      tooltip: "Konwertuj na MIDI",
+                                    ),
+                                    IconButton(
+                                      icon: isLoading
+                                          ? SizedBox(
+                                              width: 20,
+                                              height: 20,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2.4,
+                                                color: colorScheme.primary,
+                                              ),
+                                            )
+                                          : Icon(
+                                              isPlaying
+                                                  ? Icons.stop_circle
+                                                  : Icons.play_arrow,
+                                              color: isPlaying
+                                                  ? Colors.redAccent
+                                                  : colorScheme.primary,
+                                            ),
+                                      onPressed: () =>
+                                          playOrStopSketch(itemId, audioPath),
+                                      tooltip: isPlaying
+                                          ? "Zatrzymaj odtwarzanie"
+                                          : "Odtwórz klip",
+                                    ),
+                                  ],
+                                ),
+                                isThreeLine: job != null,
+                                minVerticalPadding: 8,
+                              ),
                             ),
-                            isThreeLine: job != null,
-                            minVerticalPadding: 8,
-                          ),
-                        ),
+                          );
+                        },
                       );
                     },
-                  );
-                },
-              ),
-            ),
-          ],
+                  ),
+                ),
+              ],
             ),
           ),
           if (_isGeneratingMidiPreview)
@@ -1647,6 +1980,259 @@ class _MyHomePageState extends State<MyHomePage> {
                 child: const Center(child: CircularProgressIndicator()),
               ),
             ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openConversionSettingsSheet() async {
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF151925),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: StatefulBuilder(
+            builder: (context, setModalState) {
+              void sync(void Function() fn) {
+                setState(fn);
+                setModalState(() {});
+              }
+
+              return Padding(
+                padding: EdgeInsets.only(
+                  left: 16,
+                  right: 16,
+                  top: 12,
+                  bottom: MediaQuery.of(context).viewInsets.bottom + 18,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Conversion Settings',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      _buildSettingsBlock(
+                        title: 'Tempo',
+                        child: Row(
+                          children: [
+                            Switch(
+                              value: _lockTempo,
+                              onChanged: (value) =>
+                                  sync(() => _lockTempo = value),
+                            ),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Tempo lock',
+                              style: TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            const Spacer(),
+                            SizedBox(
+                              width: 90,
+                              child: TextField(
+                                controller: _tempoController,
+                                keyboardType: TextInputType.number,
+                                enabled: _lockTempo,
+                                textAlign: TextAlign.center,
+                                decoration: const InputDecoration(
+                                  isDense: true,
+                                  suffixText: 'BPM',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      _buildSettingsBlock(
+                        title: 'Meter',
+                        child: Row(
+                          children: [
+                            Switch(
+                              value: _lockMeter,
+                              onChanged: (value) =>
+                                  sync(() => _lockMeter = value),
+                            ),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Meter lock',
+                              style: TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            const Spacer(),
+                            SizedBox(
+                              width: 56,
+                              child: TextField(
+                                controller: _timeSigTopController,
+                                keyboardType: TextInputType.number,
+                                enabled: _lockMeter,
+                                textAlign: TextAlign.center,
+                                decoration: const InputDecoration(
+                                  isDense: true,
+                                ),
+                              ),
+                            ),
+                            const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 6),
+                              child: Text('/'),
+                            ),
+                            SizedBox(
+                              width: 56,
+                              child: TextField(
+                                controller: _timeSigBottomController,
+                                keyboardType: TextInputType.number,
+                                enabled: _lockMeter,
+                                textAlign: TextAlign.center,
+                                decoration: const InputDecoration(
+                                  isDense: true,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      _buildSettingsBlock(
+                        title: 'Key and Scale',
+                        child: Column(
+                          children: [
+                            Row(
+                              children: [
+                                Switch(
+                                  value: _constrainToScale,
+                                  onChanged: (value) =>
+                                      sync(() => _constrainToScale = value),
+                                ),
+                                const SizedBox(width: 8),
+                                const Expanded(
+                                  child: Text(
+                                    'Key/Scale constraint',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    initialValue: _selectedKey,
+                                    isDense: true,
+                                    decoration: const InputDecoration(
+                                      isDense: true,
+                                      contentPadding: EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 8,
+                                      ),
+                                    ),
+                                    items:
+                                        const [
+                                              'C',
+                                              'C#',
+                                              'D',
+                                              'D#',
+                                              'E',
+                                              'F',
+                                              'F#',
+                                              'G',
+                                              'G#',
+                                              'A',
+                                              'A#',
+                                              'B',
+                                            ]
+                                            .map(
+                                              (k) => DropdownMenuItem(
+                                                value: k,
+                                                child: Text(k),
+                                              ),
+                                            )
+                                            .toList(),
+                                    onChanged: _constrainToScale
+                                        ? (value) {
+                                            if (value == null) return;
+                                            sync(() => _selectedKey = value);
+                                          }
+                                        : null,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    initialValue: _selectedScale,
+                                    isDense: true,
+                                    decoration: const InputDecoration(
+                                      isDense: true,
+                                      contentPadding: EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 8,
+                                      ),
+                                    ),
+                                    items: const ['Major', 'Minor']
+                                        .map(
+                                          (s) => DropdownMenuItem(
+                                            value: s,
+                                            child: Text(s),
+                                          ),
+                                        )
+                                        .toList(),
+                                    onChanged: _constrainToScale
+                                        ? (value) {
+                                            if (value == null) return;
+                                            sync(() => _selectedScale = value);
+                                          }
+                                        : null,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('Done'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSettingsBlock({required String title, required Widget child}) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1F2B),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          child,
         ],
       ),
     );
@@ -1700,7 +2286,10 @@ class _MyHomePageState extends State<MyHomePage> {
       final bpm = _lockTempo ? _parseTempoBpm() : 120;
       final bars = 2;
       final tpq = 480;
-      final ticksPerBeat = ((tpq * 4) / meter.beatUnit).round().clamp(1, 1 << 30);
+      final ticksPerBeat = ((tpq * 4) / meter.beatUnit).round().clamp(
+        1,
+        1 << 30,
+      );
       final totalTicks = ticksPerBeat * meter.beatsPerMeasure * bars;
 
       final keyPc = _keyNameToPitchClass(_selectedKey);
@@ -1761,7 +2350,10 @@ class _MyHomePageState extends State<MyHomePage> {
           .uploadBinary(
             midiFileName,
             midiBytes,
-            fileOptions: const FileOptions(contentType: 'audio/midi', upsert: true),
+            fileOptions: const FileOptions(
+              contentType: 'audio/midi',
+              upsert: true,
+            ),
           );
       final midiUrl = Supabase.instance.client.storage
           .from('audio-samples')
@@ -1782,7 +2374,10 @@ class _MyHomePageState extends State<MyHomePage> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Random melody failed: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text('Random melody failed: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
@@ -1827,9 +2422,7 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
   @override
   void initState() {
     super.initState();
-    _notes = widget.parsed.notes
-        .map((n) => EditableMidiNote.copy(n))
-        .toList()
+    _notes = widget.parsed.notes.map((n) => EditableMidiNote.copy(n)).toList()
       ..sort((a, b) => a.startTick.compareTo(b.startTick));
     _rollMinNote = _notes.isEmpty
         ? 48
@@ -1877,8 +2470,10 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
         ((tpq * 4 * widget.beatsPerMeasureOverride) / widget.beatUnitOverride)
             .round()
             .clamp(1, 1 << 30);
-    final beatTicks =
-        ((tpq * 4) / widget.beatUnitOverride).round().clamp(1, 1 << 30);
+    final beatTicks = ((tpq * 4) / widget.beatUnitOverride).round().clamp(
+      1,
+      1 << 30,
+    );
     final candidateSteps = _candidateOnsetSteps(tpq);
     final onsetStep = _bestOnsetStep(candidateSteps);
     final gridPhase = _bestGridPhase(
@@ -1909,7 +2504,10 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
           onsetStep,
           gridPhase,
         );
-        targetDuration = math.min(targetDuration, math.max(1, nextStart - quantizedStart));
+        targetDuration = math.min(
+          targetDuration,
+          math.max(1, nextStart - quantizedStart),
+        );
       }
 
       note.startTick = math.max(0, quantizedStart);
@@ -1942,7 +2540,9 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
 
     final intervals = <int>[];
     for (var i = 1; i < _notes.length; i++) {
-      intervals.add(math.max(onsetStep, _notes[i].startTick - _notes[i - 1].startTick));
+      intervals.add(
+        math.max(onsetStep, _notes[i].startTick - _notes[i - 1].startTick),
+      );
     }
     if (intervals.isEmpty) return;
 
@@ -1958,13 +2558,7 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
       final gap = _notes[i].startTick - _notes[i - 1].startTick;
       final inRun = (gap - dominantInterval).abs() <= tolerance;
       if (!inRun) {
-        _regularizeRun(
-          runStart,
-          i - 1,
-          dominantInterval,
-          onsetStep,
-          gridPhase,
-        );
+        _regularizeRun(runStart, i - 1, dominantInterval, onsetStep, gridPhase);
         runStart = i;
       }
     }
@@ -2027,8 +2621,12 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
         score += (note.startTick - snapped).abs();
 
         // Prefer beat-aligned subdivisions inside the selected meter.
-        final snappedInBar = ((snapped % measureTicks) + measureTicks) % measureTicks;
-        final beatDistance = _distanceToNearestMultiple(snappedInBar, beatTicks);
+        final snappedInBar =
+            ((snapped % measureTicks) + measureTicks) % measureTicks;
+        final beatDistance = _distanceToNearestMultiple(
+          snappedInBar,
+          beatTicks,
+        );
         score += beatDistance * 0.08;
       }
       if (score < bestScore) {
@@ -2119,11 +2717,9 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
       3 / 4,
       1.0,
     ];
-    final durations = fractions
-        .map((f) => math.max(1, (whole * f).round()))
-        .toSet()
-        .toList()
-      ..sort();
+    final durations =
+        fractions.map((f) => math.max(1, (whole * f).round())).toSet().toList()
+          ..sort();
     return durations;
   }
 
@@ -2215,18 +2811,22 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
   }
 
   // ignore: unused_element
-  Future<void> _playLiveNoteExperimentalWindowsTone(EditableMidiNote note) async {
+  Future<void> _playLiveNoteExperimentalWindowsTone(
+    EditableMidiNote note,
+  ) async {
     // Windows fallback preview synth without plugin channels:
     // trigger a simple tone per note in a detached process.
     if (!Platform.isWindows) return;
-    final freq = (440.0 * math.pow(2.0, (note.note - 69) / 12.0))
-        .round()
-        .clamp(37, 32767);
-    final durationMs = (((note.durationTicks / widget.parsed.ticksPerQuarter) *
-                (60.0 / widget.tempoOverrideBpm)) *
-            1000)
-        .round()
-        .clamp(30, 900);
+    final freq = (440.0 * math.pow(2.0, (note.note - 69) / 12.0)).round().clamp(
+      37,
+      32767,
+    );
+    final durationMs =
+        (((note.durationTicks / widget.parsed.ticksPerQuarter) *
+                    (60.0 / widget.tempoOverrideBpm)) *
+                1000)
+            .round()
+            .clamp(30, 900);
     try {
       await Process.start('powershell', [
         '-NoProfile',
@@ -2269,7 +2869,10 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     if (_undoStack.isEmpty) return;
     setState(() {
       _redoStack.add(_notes.map((n) => EditableMidiNote.copy(n)).toList());
-      _notes = _undoStack.removeLast().map((n) => EditableMidiNote.copy(n)).toList();
+      _notes = _undoStack
+          .removeLast()
+          .map((n) => EditableMidiNote.copy(n))
+          .toList();
       if (_selectedIndex >= _notes.length) _selectedIndex = -1;
     });
   }
@@ -2278,7 +2881,10 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     if (_redoStack.isEmpty) return;
     setState(() {
       _undoStack.add(_notes.map((n) => EditableMidiNote.copy(n)).toList());
-      _notes = _redoStack.removeLast().map((n) => EditableMidiNote.copy(n)).toList();
+      _notes = _redoStack
+          .removeLast()
+          .map((n) => EditableMidiNote.copy(n))
+          .toList();
       if (_selectedIndex >= _notes.length) _selectedIndex = -1;
     });
   }
@@ -2293,226 +2899,252 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     final maxNote = _rollMaxNote;
     final tickEnd = _notes.isEmpty
         ? widget.parsed.ticksPerQuarter * 4
-        : _notes
-              .map((e) => e.startTick + e.durationTicks)
-              .reduce(math.max) +
-          widget.parsed.ticksPerQuarter;
+        : _notes.map((e) => e.startTick + e.durationTicks).reduce(math.max) +
+              widget.parsed.ticksPerQuarter;
 
     return Shortcuts(
       shortcuts: const <ShortcutActivator, Intent>{
         SingleActivator(LogicalKeyboardKey.keyZ, control: true): UndoIntent(),
-        SingleActivator(
-          LogicalKeyboardKey.keyZ,
-          control: true,
-          shift: true,
-        ): RedoIntent(),
+        SingleActivator(LogicalKeyboardKey.keyZ, control: true, shift: true):
+            RedoIntent(),
         SingleActivator(LogicalKeyboardKey.space): PlayPreviewIntent(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
-          UndoIntent: CallbackAction<UndoIntent>(onInvoke: (intent) {
-            _undo();
-            return null;
-          }),
-          RedoIntent: CallbackAction<RedoIntent>(onInvoke: (intent) {
-            _redo();
-            return null;
-          }),
-          PlayPreviewIntent: CallbackAction<PlayPreviewIntent>(onInvoke: (intent) {
-            unawaited(_togglePreviewPlayback(tickEnd));
-            return null;
-          }),
+          UndoIntent: CallbackAction<UndoIntent>(
+            onInvoke: (intent) {
+              _undo();
+              return null;
+            },
+          ),
+          RedoIntent: CallbackAction<RedoIntent>(
+            onInvoke: (intent) {
+              _redo();
+              return null;
+            },
+          ),
+          PlayPreviewIntent: CallbackAction<PlayPreviewIntent>(
+            onInvoke: (intent) {
+              unawaited(_togglePreviewPlayback(tickEnd));
+              return null;
+            },
+          ),
         },
         child: Focus(
           autofocus: true,
           child: AlertDialog(
-      insetPadding: isCompact
-          ? const EdgeInsets.symmetric(horizontal: 12, vertical: 16)
-          : const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
-      title: const Text('Edit MIDI'),
-      content: SizedBox(
-        width: dialogWidth,
-        height: dialogHeight,
-        child: Column(
-          children: [
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
+            insetPadding: isCompact
+                ? const EdgeInsets.symmetric(horizontal: 12, vertical: 16)
+                : const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+            title: const Text('Edit MIDI'),
+            content: SizedBox(
+              width: dialogWidth,
+              height: dialogHeight,
+              child: Column(
                 children: [
-                  IconButton(
-                    onPressed: _selectedIndex >= 0 ? _deleteSelected : null,
-                    icon: const Icon(Icons.delete_outline),
-                    tooltip: 'Delete note',
-                  ),
-                  IconButton(
-                    onPressed: _undoStack.isNotEmpty ? _undo : null,
-                    icon: const Icon(Icons.undo),
-                    tooltip: 'Undo',
-                  ),
-                  IconButton(
-                    onPressed: _redoStack.isNotEmpty ? _redo : null,
-                    icon: const Icon(Icons.redo),
-                    tooltip: 'Redo',
-                  ),
-                  const SizedBox(width: 12),
-                  DropdownButton<int>(
-                    value: _gridDivider,
-                    items: const [
-                      DropdownMenuItem(value: 4, child: Text('1/4')),
-                      DropdownMenuItem(value: 3, child: Text('1/3')),
-                      DropdownMenuItem(value: 6, child: Text('1/6')),
-                    ],
-                    onChanged: (value) {
-                      if (value == null) return;
-                      setState(() => _gridDivider = value);
-                    },
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    onPressed: () => unawaited(_togglePreviewPlayback(tickEnd)),
-                    icon: Icon(_isPreviewPlaying ? Icons.stop : Icons.play_arrow),
-                    tooltip: 'Play/Pause (Space)',
-                  ),
-                  IconButton(
-                    onPressed: () => unawaited(_rewindPreview()),
-                    icon: const Icon(Icons.replay),
-                    tooltip: 'Rewind to start',
-                  ),
-                  const SizedBox(width: 4),
-                  FilledButton.tonal(
-                    onPressed: _quantizeAll,
-                    child: const Text('Quantize'),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final noteSpan = math.max(12, maxNote - minNote + 1);
-                  final laneHeight = constraints.maxHeight / noteSpan;
-                  return Container(
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF111216),
-                      borderRadius: BorderRadius.circular(8),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        IconButton(
+                          onPressed: _selectedIndex >= 0
+                              ? _deleteSelected
+                              : null,
+                          icon: const Icon(Icons.delete_outline),
+                          tooltip: 'Delete note',
+                        ),
+                        IconButton(
+                          onPressed: _undoStack.isNotEmpty ? _undo : null,
+                          icon: const Icon(Icons.undo),
+                          tooltip: 'Undo',
+                        ),
+                        IconButton(
+                          onPressed: _redoStack.isNotEmpty ? _redo : null,
+                          icon: const Icon(Icons.redo),
+                          tooltip: 'Redo',
+                        ),
+                        const SizedBox(width: 12),
+                        DropdownButton<int>(
+                          value: _gridDivider,
+                          items: const [
+                            DropdownMenuItem(value: 4, child: Text('1/4')),
+                            DropdownMenuItem(value: 3, child: Text('1/3')),
+                            DropdownMenuItem(value: 6, child: Text('1/6')),
+                          ],
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setState(() => _gridDivider = value);
+                          },
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          onPressed: () =>
+                              unawaited(_togglePreviewPlayback(tickEnd)),
+                          icon: Icon(
+                            _isPreviewPlaying ? Icons.stop : Icons.play_arrow,
+                          ),
+                          tooltip: 'Play/Pause (Space)',
+                        ),
+                        IconButton(
+                          onPressed: () => unawaited(_rewindPreview()),
+                          icon: const Icon(Icons.replay),
+                          tooltip: 'Rewind to start',
+                        ),
+                        const SizedBox(width: 4),
+                        FilledButton.tonal(
+                          onPressed: _quantizeAll,
+                          child: const Text('Quantize'),
+                        ),
+                      ],
                     ),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
                     child: LayoutBuilder(
-                      builder: (context, inner) {
-                        final tickScale = inner.maxWidth / math.max(1, tickEnd);
-                        final barTicks =
-                            ((widget.parsed.ticksPerQuarter * 4 * widget.beatsPerMeasureOverride) /
-                                    widget.beatUnitOverride)
-                                .round();
-                        final beatTicks =
-                            ((widget.parsed.ticksPerQuarter * 4) / widget.beatUnitOverride)
-                                .round();
-                        return Listener(
-                          onPointerDown: (event) {
-                            if ((event.buttons & kSecondaryMouseButton) != 0) {
-                              _commitUndoState();
-                              setState(() {
-                                _erasePointer = event.pointer;
-                                _erasedIndices.clear();
-                                _eraseAtPosition(
-                                  event.localPosition,
-                                  maxNote: maxNote,
-                                  laneHeight: laneHeight,
-                                  tickScale: tickScale,
-                                );
-                              });
-                            }
-                          },
-                          onPointerMove: (event) {
-                            if (_erasePointer == event.pointer &&
-                                (event.buttons & kSecondaryMouseButton) != 0) {
-                              setState(() {
-                                _eraseAtPosition(
-                                  event.localPosition,
-                                  maxNote: maxNote,
-                                  laneHeight: laneHeight,
-                                  tickScale: tickScale,
-                                );
-                              });
-                            }
-                          },
-                          onPointerUp: (event) {
-                            if (_erasePointer == event.pointer) {
-                              setState(() {
-                                _erasePointer = null;
-                                _erasedIndices.clear();
-                              });
-                            }
-                          },
-                          child: Stack(
-                            children: [
-                              for (var tick = 0; tick <= tickEnd; tick += _gridTick())
-                                Positioned(
-                                  left: tick * tickScale,
-                                  top: 0,
-                                  bottom: 0,
-                                  child: Container(
-                                    width: tick % barTicks == 0 ? 2 : 1,
-                                    color: tick % barTicks == 0
-                                        ? const Color(0xFF3A3F4D)
-                                        : tick % beatTicks == 0
-                                        ? const Color(0xFF2A2D36)
-                                        : const Color(0xFF1A1C22),
-                                  ),
+                      builder: (context, constraints) {
+                        final noteSpan = math.max(12, maxNote - minNote + 1);
+                        final laneHeight = constraints.maxHeight / noteSpan;
+                        return Container(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF111216),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: LayoutBuilder(
+                            builder: (context, inner) {
+                              final tickScale =
+                                  inner.maxWidth / math.max(1, tickEnd);
+                              final barTicks =
+                                  ((widget.parsed.ticksPerQuarter *
+                                              4 *
+                                              widget.beatsPerMeasureOverride) /
+                                          widget.beatUnitOverride)
+                                      .round();
+                              final beatTicks =
+                                  ((widget.parsed.ticksPerQuarter * 4) /
+                                          widget.beatUnitOverride)
+                                      .round();
+                              return Listener(
+                                onPointerDown: (event) {
+                                  if ((event.buttons & kSecondaryMouseButton) !=
+                                      0) {
+                                    _commitUndoState();
+                                    setState(() {
+                                      _erasePointer = event.pointer;
+                                      _erasedIndices.clear();
+                                      _eraseAtPosition(
+                                        event.localPosition,
+                                        maxNote: maxNote,
+                                        laneHeight: laneHeight,
+                                        tickScale: tickScale,
+                                      );
+                                    });
+                                  }
+                                },
+                                onPointerMove: (event) {
+                                  if (_erasePointer == event.pointer &&
+                                      (event.buttons & kSecondaryMouseButton) !=
+                                          0) {
+                                    setState(() {
+                                      _eraseAtPosition(
+                                        event.localPosition,
+                                        maxNote: maxNote,
+                                        laneHeight: laneHeight,
+                                        tickScale: tickScale,
+                                      );
+                                    });
+                                  }
+                                },
+                                onPointerUp: (event) {
+                                  if (_erasePointer == event.pointer) {
+                                    setState(() {
+                                      _erasePointer = null;
+                                      _erasedIndices.clear();
+                                    });
+                                  }
+                                },
+                                child: Stack(
+                                  children: [
+                                    for (
+                                      var tick = 0;
+                                      tick <= tickEnd;
+                                      tick += _gridTick()
+                                    )
+                                      Positioned(
+                                        left: tick * tickScale,
+                                        top: 0,
+                                        bottom: 0,
+                                        child: Container(
+                                          width: tick % barTicks == 0 ? 2 : 1,
+                                          color: tick % barTicks == 0
+                                              ? const Color(0xFF3A3F4D)
+                                              : tick % beatTicks == 0
+                                              ? const Color(0xFF2A2D36)
+                                              : const Color(0xFF1A1C22),
+                                        ),
+                                      ),
+                                    for (var i = 0; i <= noteSpan; i++)
+                                      Positioned(
+                                        top: i * laneHeight,
+                                        left: 0,
+                                        right: 0,
+                                        child: Container(
+                                          height: 1,
+                                          color: const Color(0xFF1E2128),
+                                        ),
+                                      ),
+                                    if (_isPreviewPlaying || _playheadTick > 0)
+                                      Positioned(
+                                        left: (_playheadTick * tickScale).clamp(
+                                          0.0,
+                                          inner.maxWidth - 1,
+                                        ),
+                                        top: 0,
+                                        bottom: 0,
+                                        child: Container(
+                                          width: 2,
+                                          color: Colors.redAccent,
+                                        ),
+                                      ),
+                                    for (var i = 0; i < _notes.length; i++)
+                                      _buildNoteRect(
+                                        i,
+                                        _notes[i],
+                                        maxNote: maxNote,
+                                        laneHeight: laneHeight,
+                                        tickScale: tickScale,
+                                        showConfidenceHeatmap:
+                                            _showConfidenceHeatmap,
+                                      ),
+                                  ],
                                 ),
-                              for (var i = 0; i <= noteSpan; i++)
-                                Positioned(
-                                  top: i * laneHeight,
-                                  left: 0,
-                                  right: 0,
-                                  child: Container(height: 1, color: const Color(0xFF1E2128)),
-                                ),
-                              if (_isPreviewPlaying || _playheadTick > 0)
-                                Positioned(
-                                  left: (_playheadTick * tickScale).clamp(0.0, inner.maxWidth - 1),
-                                  top: 0,
-                                  bottom: 0,
-                                  child: Container(width: 2, color: Colors.redAccent),
-                                ),
-                              for (var i = 0; i < _notes.length; i++)
-                                _buildNoteRect(
-                                  i,
-                                  _notes[i],
-                                  maxNote: maxNote,
-                                  laneHeight: laneHeight,
-                                  tickScale: tickScale,
-                                  showConfidenceHeatmap: _showConfidenceHeatmap,
-                                ),
-                            ],
+                              );
+                            },
                           ),
                         );
                       },
                     ),
-                  );
-                },
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () {
-            final output = widget.parsed.rebuild(
-              _notes,
-              tempoOverrideBpm: widget.tempoOverrideBpm,
-              beatsPerMeasureOverride: widget.beatsPerMeasureOverride,
-              beatUnitOverride: widget.beatUnitOverride,
-            );
-            Navigator.pop(context, output);
-          },
-          child: const Text('Apply'),
-        ),
-      ],
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final output = widget.parsed.rebuild(
+                    _notes,
+                    tempoOverrideBpm: widget.tempoOverrideBpm,
+                    beatsPerMeasureOverride: widget.beatsPerMeasureOverride,
+                    beatUnitOverride: widget.beatUnitOverride,
+                  );
+                  Navigator.pop(context, output);
+                },
+                child: const Text('Apply'),
+              ),
+            ],
           ),
         ),
       ),
@@ -2592,7 +3224,9 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
                   _selectedIndex = index;
                   final endTick = note.startTick + note.durationTicks;
                   final deltaTicks = (details.delta.dx / tickScale).round();
-                  var newStart = _snapTick(math.max(0, note.startTick + deltaTicks));
+                  var newStart = _snapTick(
+                    math.max(0, note.startTick + deltaTicks),
+                  );
                   if (endTick - newStart < grid) {
                     newStart = endTick - grid;
                   }
@@ -2629,7 +3263,20 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
   }
 
   String _midiToLabel(int midiNote) {
-    const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const names = [
+      'C',
+      'C#',
+      'D',
+      'D#',
+      'E',
+      'F',
+      'F#',
+      'G',
+      'G#',
+      'A',
+      'A#',
+      'B',
+    ];
     return '${names[midiNote % 12]}${(midiNote ~/ 12) - 1}';
   }
 
@@ -2664,7 +3311,11 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
         ? <int>{0, 2, 3, 5, 7, 8, 10}
         : <int>{0, 2, 4, 5, 7, 9, 11};
     for (final n in notes) {
-      n.note = _closestNoteInScale(n.note, constraint.tonic, allowedPitchClasses);
+      n.note = _closestNoteInScale(
+        n.note,
+        constraint.tonic,
+        allowedPitchClasses,
+      );
     }
   }
 
@@ -2686,9 +3337,7 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
 
   void _alignNotesToStart(List<EditableMidiNote> notes) {
     if (notes.isEmpty) return;
-    final firstTick = notes
-        .map((n) => n.startTick)
-        .reduce(math.min);
+    final firstTick = notes.map((n) => n.startTick).reduce(math.min);
     if (firstTick <= 0) return;
     for (final note in notes) {
       note.startTick = math.max(0, note.startTick - firstTick);
@@ -2724,11 +3373,11 @@ class EditableMidiNote {
   });
 
   factory EditableMidiNote.copy(EditableMidiNote n) => EditableMidiNote(
-        note: n.note,
-        startTick: n.startTick,
-        durationTicks: n.durationTicks,
-        velocity: n.velocity,
-      );
+    note: n.note,
+    startTick: n.startTick,
+    durationTicks: n.durationTicks,
+    velocity: n.velocity,
+  );
 
   int note;
   int startTick;
@@ -2752,7 +3401,8 @@ class ParsedMidi {
   final List<EditableMidiNote> notes;
 
   static ParsedMidi? tryParse(Uint8List bytes) {
-    if (bytes.length < 14 || String.fromCharCodes(bytes.sublist(0, 4)) != 'MThd') {
+    if (bytes.length < 14 ||
+        String.fromCharCodes(bytes.sublist(0, 4)) != 'MThd') {
       return null;
     }
     final headerLength = _readUint32BE(bytes, 4);
@@ -2765,7 +3415,9 @@ class ParsedMidi {
 
     var chunkOffset = 8 + headerLength;
     while (chunkOffset + 8 <= bytes.length) {
-      final chunkType = String.fromCharCodes(bytes.sublist(chunkOffset, chunkOffset + 4));
+      final chunkType = String.fromCharCodes(
+        bytes.sublist(chunkOffset, chunkOffset + 4),
+      );
       final chunkLength = _readUint32BE(bytes, chunkOffset + 4);
       final chunkDataStart = chunkOffset + 8;
       final chunkDataEnd = chunkDataStart + chunkLength;
@@ -2800,9 +3452,12 @@ class ParsedMidi {
             final len = _readVarLen(bytes, idx);
             idx = len.next;
             if (metaType == 0x51 && len.value == 3 && idx + 2 < chunkDataEnd) {
-              final mpq = (bytes[idx] << 16) | (bytes[idx + 1] << 8) | bytes[idx + 2];
+              final mpq =
+                  (bytes[idx] << 16) | (bytes[idx + 1] << 8) | bytes[idx + 2];
               if (mpq > 0) tempoBpm = (60000000 / mpq).round();
-            } else if (metaType == 0x58 && len.value >= 2 && idx + 1 < chunkDataEnd) {
+            } else if (metaType == 0x58 &&
+                len.value >= 2 &&
+                idx + 1 < chunkDataEnd) {
               beatsPerMeasure = bytes[idx].clamp(1, 12);
               final denominatorPower = bytes[idx + 1].clamp(0, 8);
               beatUnit = 1 << denominatorPower;
@@ -2870,18 +3525,36 @@ class ParsedMidi {
   }) {
     final track = <int>[];
     final effectiveTempo = math.max(1, tempoOverrideBpm ?? tempoBpm);
-    final effectiveBeatsPerMeasure = (beatsPerMeasureOverride ?? beatsPerMeasure).clamp(1, 12);
+    final effectiveBeatsPerMeasure =
+        (beatsPerMeasureOverride ?? beatsPerMeasure).clamp(1, 12);
     final allowedBeatUnits = {1, 2, 4, 8, 16, 32, 64, 128, 256};
     final candidateBeatUnit = beatUnitOverride ?? beatUnit;
     final effectiveBeatUnit = allowedBeatUnits.contains(candidateBeatUnit)
         ? candidateBeatUnit
         : 4;
     final mpq = (60000000 / effectiveTempo).round();
-    final denominatorPower = (math.log(effectiveBeatUnit) / math.ln2).round().clamp(0, 8);
+    final denominatorPower = (math.log(effectiveBeatUnit) / math.ln2)
+        .round()
+        .clamp(0, 8);
     track.addAll([
-      0x00, 0xFF, 0x51, 0x03, (mpq >> 16) & 0xFF, (mpq >> 8) & 0xFF, mpq & 0xFF,
-      0x00, 0xFF, 0x58, 0x04, effectiveBeatsPerMeasure, denominatorPower, 0x18, 0x08,
-      0x00, 0xC0, 0x00,
+      0x00,
+      0xFF,
+      0x51,
+      0x03,
+      (mpq >> 16) & 0xFF,
+      (mpq >> 8) & 0xFF,
+      mpq & 0xFF,
+      0x00,
+      0xFF,
+      0x58,
+      0x04,
+      effectiveBeatsPerMeasure,
+      denominatorPower,
+      0x18,
+      0x08,
+      0x00,
+      0xC0,
+      0x00,
     ]);
 
     final events = <_MidiEditEvent>[];
@@ -2909,12 +3582,24 @@ class ParsedMidi {
     track.addAll([0x00, 0xFF, 0x2F, 0x00]);
 
     return Uint8List.fromList([
-      0x4D, 0x54, 0x68, 0x64,
-      0x00, 0x00, 0x00, 0x06,
-      0x00, 0x00,
-      0x00, 0x01,
-      (ticksPerQuarter >> 8) & 0xFF, ticksPerQuarter & 0xFF,
-      0x4D, 0x54, 0x72, 0x6B,
+      0x4D,
+      0x54,
+      0x68,
+      0x64,
+      0x00,
+      0x00,
+      0x00,
+      0x06,
+      0x00,
+      0x00,
+      0x00,
+      0x01,
+      (ticksPerQuarter >> 8) & 0xFF,
+      ticksPerQuarter & 0xFF,
+      0x4D,
+      0x54,
+      0x72,
+      0x6B,
       (track.length >> 24) & 0xFF,
       (track.length >> 16) & 0xFF,
       (track.length >> 8) & 0xFF,
