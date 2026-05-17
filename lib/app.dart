@@ -567,7 +567,7 @@ class _JumpingNotesOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     return TweenAnimationBuilder<double>(
       tween: Tween<double>(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 1600),
+      duration: const Duration(milliseconds: 1900),
       curve: Curves.easeOutQuart,
       builder: (context, value, _) {
         return LayoutBuilder(
@@ -577,29 +577,30 @@ class _JumpingNotesOverlay extends StatelessWidget {
 
             final centerX = width * 0.5;
             final centerY = height * 0.56;
-            const glyphs = ['*', '+', 'o', 'x', '.'];
+            const glyphs = ['♪', '♫', '♬', '♩', '✦', '•', '+', '*'];
             const colors = <Color>[
               Color(0xFF6EE7FF),
               Color(0xFFC084FC),
               Color(0xFFFFD166),
               Color(0xFF8BFFB7),
+              Color(0xFFFF7AC6),
             ];
             return Stack(
-              children: List<Widget>.generate(44, (i) {
-                final localDelay = (i % 11) * 0.025;
+              children: List<Widget>.generate(86, (i) {
+                final localDelay = (i % 14) * 0.018;
                 final p = ((value - localDelay) / (1 - localDelay)).clamp(
                   0.0,
                   1.0,
                 );
                 if (p <= 0) return const SizedBox.shrink();
-                final angle = ((i * 33) % 360) * (math.pi / 180.0);
-                final speed = 110.0 + ((i * 19) % 140);
+                final angle = ((i * 29) % 360) * (math.pi / 180.0);
+                final speed = 165.0 + ((i * 23) % 180);
                 final flight = Curves.easeOut.transform(p);
                 final dx = math.cos(angle) * speed * flight;
-                final dy = math.sin(angle) * speed * flight + (190.0 * p * p);
-                final spin = (i.isEven ? 1 : -1) * (p * math.pi * 2.6);
-                final alpha = (1.0 - p).clamp(0.0, 1.0);
-                final size = 10.0 + (i % 5) * 4.0;
+                final dy = math.sin(angle) * speed * flight + (235.0 * p * p);
+                final spin = (i.isEven ? 1 : -1) * (p * math.pi * 3.4);
+                final alpha = (1.1 - p).clamp(0.0, 1.0);
+                final size = 12.0 + (i % 6) * 4.0;
                 final glyph = glyphs[i % glyphs.length];
                 final color = colors[i % colors.length];
                 return Positioned(
@@ -610,7 +611,7 @@ class _JumpingNotesOverlay extends StatelessWidget {
                     child: Transform.rotate(
                       angle: spin,
                       child: Transform.scale(
-                        scale: 0.85 + ((1 - p) * 0.35),
+                        scale: 0.95 + ((1 - p) * 0.45),
                         child: Text(
                           glyph,
                           style: TextStyle(
@@ -619,8 +620,8 @@ class _JumpingNotesOverlay extends StatelessWidget {
                             color: color,
                             shadows: [
                               Shadow(
-                                color: color.withValues(alpha: 0.55),
-                                blurRadius: 10,
+                                color: color.withValues(alpha: 0.70),
+                                blurRadius: 14,
                               ),
                             ],
                           ),
