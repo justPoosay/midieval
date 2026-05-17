@@ -111,6 +111,7 @@ Rule going forward: before each commit, this section is updated.
 - [x] Split app implementation into focused files (`app_shell`, `profile_settings_page`, `home_page`, `midi_editor_dialog`).
 - [x] Tune close-note handling to reduce accidental merges and preserve nearby melodic steps.
 - [x] Improve key/scale constraint snapping with context-aware melodic direction scoring.
+- [x] Fix buggy piano-roll note interactions: smooth drag movement and isolated resize behavior (no random neighboring note stretch/shrink).
 - [] Add hosted/production bridge reliability strategy (timeouts, retries, health fallback).
 - [] Consider moving bridge inference on-device/native for mobile (future architecture option).
 - [] Add smart rhythm repair presets (`Tight`, `Natural`, `Legato`, `Staccato`) that switch quantize/snap behavior profiles.

@@ -32,8 +32,11 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
   bool _isPreviewPlaying = false;
   double _playheadTick = 0;
   Timer? _previewTimer;
+  late int _timelineTickEnd;
   int? _erasePointer;
   final Set<int> _erasedIndices = <int>{};
+  _MoveDragContext? _moveDrag;
+  _ResizeDragContext? _resizeDrag;
 
   @override
   void initState() {
@@ -51,6 +54,7 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
       _rollMaxNote = 72;
     }
     _alignNotesToStart(_notes);
+    _timelineTickEnd = _initialTimelineTickEnd(_notes);
     if (widget.keyScaleConstraint != null) {
       _constrainNotesToScale(_notes, widget.keyScaleConstraint!);
     }
@@ -68,6 +72,7 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     setState(() {
       _notes.removeAt(_selectedIndex);
       _selectedIndex = -1;
+      _stopPreviewIfOutOfRange();
     });
   }
 
@@ -77,6 +82,8 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     setState(() {
       _intelligentQuantize();
       _notes.sort((a, b) => a.startTick.compareTo(b.startTick));
+      _ensureTimelineCoversAll();
+      _stopPreviewIfOutOfRange();
     });
   }
 
@@ -366,6 +373,128 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     return (tick / grid).round() * grid;
   }
 
+  int _initialTimelineTickEnd(List<EditableMidiNote> notes) {
+    final defaultTicks = widget.parsed.ticksPerQuarter * 4;
+    if (notes.isEmpty) return defaultTicks;
+    final noteEnd = notes
+        .map((e) => e.startTick + e.durationTicks)
+        .reduce(math.max);
+    return math.max(defaultTicks, noteEnd + widget.parsed.ticksPerQuarter);
+  }
+
+  void _ensureTimelineCoversAll() {
+    final computed = _initialTimelineTickEnd(_notes);
+    if (computed > _timelineTickEnd) {
+      _timelineTickEnd = computed;
+    }
+  }
+
+  void _stopPreviewIfOutOfRange() {
+    if (_playheadTick <= _timelineTickEnd) return;
+    _previewTimer?.cancel();
+    _isPreviewPlaying = false;
+    _playheadTick = _timelineTickEnd.toDouble();
+  }
+
+  void _startMoveDrag(
+    int index,
+    DragStartDetails details,
+    double tickScale,
+    double laneHeight,
+  ) {
+    _commitUndoState();
+    _moveDrag = _MoveDragContext(
+      index: index,
+      startGlobal: details.globalPosition,
+      startTick: _notes[index].startTick,
+      startNote: _notes[index].note,
+      tickScale: tickScale,
+      laneHeight: laneHeight,
+    );
+  }
+
+  void _updateMoveDrag(int index, DragUpdateDetails details) {
+    final ctx = _moveDrag;
+    if (ctx == null || ctx.index != index) return;
+    final note = _notes[index];
+    final rawTickDelta =
+        ((details.globalPosition.dx - ctx.startGlobal.dx) / ctx.tickScale)
+            .round();
+    final rawPitchDelta =
+        ((details.globalPosition.dy - ctx.startGlobal.dy) / ctx.laneHeight)
+            .round();
+    note.startTick = math.max(0, ctx.startTick + rawTickDelta);
+    note.note = (ctx.startNote - rawPitchDelta).clamp(0, 127);
+    _ensureTimelineCoversAll();
+  }
+
+  void _endMoveDrag(int index) {
+    final ctx = _moveDrag;
+    if (ctx == null || ctx.index != index) return;
+    final note = _notes[index];
+    note.startTick = _snapTick(math.max(0, note.startTick));
+    _moveDrag = null;
+  }
+
+  void _startResizeDrag(
+    int index,
+    DragStartDetails details,
+    _ResizeEdge edge,
+    double tickScale,
+  ) {
+    _commitUndoState();
+    _resizeDrag = _ResizeDragContext(
+      index: index,
+      edge: edge,
+      startGlobal: details.globalPosition,
+      startTick: _notes[index].startTick,
+      startDuration: _notes[index].durationTicks,
+      tickScale: tickScale,
+    );
+  }
+
+  void _updateResizeDrag(int index, DragUpdateDetails details) {
+    final ctx = _resizeDrag;
+    if (ctx == null || ctx.index != index) return;
+    final note = _notes[index];
+    final grid = _gridTick();
+    final tickDelta =
+        ((details.globalPosition.dx - ctx.startGlobal.dx) / ctx.tickScale)
+            .round();
+    if (ctx.edge == _ResizeEdge.left) {
+      final originalEnd = ctx.startTick + ctx.startDuration;
+      var newStart = math.max(0, ctx.startTick + tickDelta);
+      if (originalEnd - newStart < grid) {
+        newStart = originalEnd - grid;
+      }
+      note.startTick = math.max(0, newStart);
+      note.durationTicks = math.max(grid, originalEnd - note.startTick);
+    } else {
+      final newDuration = math.max(grid, ctx.startDuration + tickDelta);
+      note.durationTicks = newDuration;
+    }
+    _ensureTimelineCoversAll();
+  }
+
+  void _endResizeDrag(int index) {
+    final ctx = _resizeDrag;
+    if (ctx == null || ctx.index != index) return;
+    final note = _notes[index];
+    final grid = _gridTick();
+    if (ctx.edge == _ResizeEdge.left) {
+      final endTick = note.startTick + note.durationTicks;
+      var snappedStart = _snapTick(note.startTick);
+      if (endTick - snappedStart < grid) {
+        snappedStart = endTick - grid;
+      }
+      note.startTick = math.max(0, snappedStart);
+      note.durationTicks = math.max(grid, endTick - note.startTick);
+    } else {
+      note.durationTicks = math.max(grid, _snapTick(note.durationTicks));
+    }
+    _resizeDrag = null;
+  }
+
   Future<void> _togglePreviewPlayback(int tickEnd) async {
     if (_isPreviewPlaying) {
       _previewTimer?.cancel();
@@ -489,6 +618,8 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
           .removeLast()
           .map((n) => EditableMidiNote.copy(n))
           .toList();
+      _ensureTimelineCoversAll();
+      _stopPreviewIfOutOfRange();
       if (_selectedIndex >= _notes.length) _selectedIndex = -1;
     });
   }
@@ -501,6 +632,8 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
           .removeLast()
           .map((n) => EditableMidiNote.copy(n))
           .toList();
+      _ensureTimelineCoversAll();
+      _stopPreviewIfOutOfRange();
       if (_selectedIndex >= _notes.length) _selectedIndex = -1;
     });
   }
@@ -513,10 +646,7 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     final dialogHeight = isCompact ? screen.height * 0.62 : 420.0;
     final minNote = _rollMinNote;
     final maxNote = _rollMaxNote;
-    final tickEnd = _notes.isEmpty
-        ? widget.parsed.ticksPerQuarter * 4
-        : _notes.map((e) => e.startTick + e.durationTicks).reduce(math.max) +
-              widget.parsed.ticksPerQuarter;
+    final tickEnd = _timelineTickEnd;
 
     return Shortcuts(
       shortcuts: const <ShortcutActivator, Intent>{
@@ -779,7 +909,6 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     final rectTop = (math.max(0, top.toDouble())) * laneHeight;
     final left = note.startTick * tickScale;
     final width = math.max(6.0, note.durationTicks * tickScale);
-    final grid = _gridTick();
     final confidence = _confidenceFromVelocity(note.velocity);
     final noteColor = showConfidenceHeatmap
         ? _confidenceColor(confidence, selected: _selectedIndex == index)
@@ -796,20 +925,20 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
           Positioned.fill(
             child: GestureDetector(
               onTap: () => setState(() => _selectedIndex = index),
-              onPanStart: (_) => _commitUndoState(),
+              onPanStart: (details) {
+                setState(() {
+                  _selectedIndex = index;
+                  _startMoveDrag(index, details, tickScale, laneHeight);
+                });
+              },
               onPanUpdate: (details) {
                 setState(() {
                   _selectedIndex = index;
-                  final deltaTicks = (details.delta.dx / tickScale).round();
-                  final nextStart = _snapTick(
-                    math.max(0, note.startTick + deltaTicks),
-                  );
-                  note.startTick = nextStart;
-                  final pitchDelta = (details.delta.dy / laneHeight).round();
-                  if (pitchDelta != 0) {
-                    note.note = (note.note - pitchDelta).clamp(0, 127);
-                  }
+                  _updateMoveDrag(index, details);
                 });
+              },
+              onPanEnd: (_) {
+                setState(() => _endMoveDrag(index));
               },
               child: Container(
                 decoration: BoxDecoration(
@@ -834,21 +963,20 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
             bottom: 0,
             width: 10,
             child: GestureDetector(
-              onHorizontalDragStart: (_) => _commitUndoState(),
+              onHorizontalDragStart: (details) {
+                setState(() {
+                  _selectedIndex = index;
+                  _startResizeDrag(index, details, _ResizeEdge.left, tickScale);
+                });
+              },
               onHorizontalDragUpdate: (details) {
                 setState(() {
                   _selectedIndex = index;
-                  final endTick = note.startTick + note.durationTicks;
-                  final deltaTicks = (details.delta.dx / tickScale).round();
-                  var newStart = _snapTick(
-                    math.max(0, note.startTick + deltaTicks),
-                  );
-                  if (endTick - newStart < grid) {
-                    newStart = endTick - grid;
-                  }
-                  note.durationTicks = math.max(grid, endTick - newStart);
-                  note.startTick = math.max(0, newStart);
+                  _updateResizeDrag(index, details);
                 });
+              },
+              onHorizontalDragEnd: (_) {
+                setState(() => _endResizeDrag(index));
               },
               child: Container(color: const Color(0x33FFFFFF)),
             ),
@@ -859,16 +987,25 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
             bottom: 0,
             width: 10,
             child: GestureDetector(
-              onHorizontalDragStart: (_) => _commitUndoState(),
+              onHorizontalDragStart: (details) {
+                setState(() {
+                  _selectedIndex = index;
+                  _startResizeDrag(
+                    index,
+                    details,
+                    _ResizeEdge.right,
+                    tickScale,
+                  );
+                });
+              },
               onHorizontalDragUpdate: (details) {
                 setState(() {
                   _selectedIndex = index;
-                  final deltaTicks = (details.delta.dx / tickScale).round();
-                  final newDur = _snapTick(
-                    math.max(grid, note.durationTicks + deltaTicks),
-                  );
-                  note.durationTicks = math.max(grid, newDur);
+                  _updateResizeDrag(index, details);
                 });
+              },
+              onHorizontalDragEnd: (_) {
+                setState(() => _endResizeDrag(index));
               },
               child: Container(color: const Color(0x33FFFFFF)),
             ),
@@ -987,3 +1124,40 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
   }
 }
 
+class _MoveDragContext {
+  const _MoveDragContext({
+    required this.index,
+    required this.startGlobal,
+    required this.startTick,
+    required this.startNote,
+    required this.tickScale,
+    required this.laneHeight,
+  });
+
+  final int index;
+  final Offset startGlobal;
+  final int startTick;
+  final int startNote;
+  final double tickScale;
+  final double laneHeight;
+}
+
+enum _ResizeEdge { left, right }
+
+class _ResizeDragContext {
+  const _ResizeDragContext({
+    required this.index,
+    required this.edge,
+    required this.startGlobal,
+    required this.startTick,
+    required this.startDuration,
+    required this.tickScale,
+  });
+
+  final int index;
+  final _ResizeEdge edge;
+  final Offset startGlobal;
+  final int startTick;
+  final int startDuration;
+  final double tickScale;
+}
