@@ -107,6 +107,7 @@ Rule going forward: before each commit, this section is updated.
 - [x] Add detailed "Problem This Project Tackles" explanation in README.
 - [x] Prepare local ML rhythm experiment route (`tool/ml_midi`) and training docs (archived path).
 - [x] Add bridge docs for TorchCrepe and Basic Pitch routes.
+- [x] Refactor `main.dart` into a thin bootstrap entry and move app implementation into dedicated files.
 - [] Add hosted/production bridge reliability strategy (timeouts, retries, health fallback).
 - [] Consider moving bridge inference on-device/native for mobile (future architecture option).
 - [] Add smart rhythm repair presets (`Tight`, `Natural`, `Legato`, `Staccato`) that switch quantize/snap behavior profiles.
