@@ -161,25 +161,21 @@ def _stabilize_midi_notes(midi_data: object) -> None:
             note_dur = note.end - note.start
             prev_dur = prev.end - prev.start
 
-            # Very short blips near current pitch are treated as pitch shimmer.
-            if gap <= 0.16 and pitch_diff <= 2 and note_dur <= 0.26:
+            # Very short near-unison blips are treated as shimmer.
+            # Keep semitone neighbors (E/F, B/C, etc.) so scale motion survives.
+            if gap <= 0.08 and pitch_diff == 0 and note_dur <= 0.12:
                 prev.end = max(prev.end, note.end)
                 prev.velocity = max(prev.velocity, note.velocity)
                 continue
 
             # If same (or very close) pitch with tiny gap, fuse them.
-            if gap <= 0.18 and pitch_diff <= 1:
+            if gap <= 0.12 and pitch_diff == 0:
                 prev.end = max(prev.end, note.end)
                 prev.velocity = max(prev.velocity, note.velocity)
                 continue
 
-            # Tiny semitone between two stronger notes tends to be vocal modulation.
-            if (
-                gap <= 0.16
-                and pitch_diff <= 2
-                and note_dur <= 0.22
-                and prev_dur >= 0.06
-            ):
+            # Keep this guard strict: only absorb ultra-short exact-repeat artifacts.
+            if gap <= 0.06 and pitch_diff == 0 and note_dur <= 0.08 and prev_dur >= 0.06:
                 prev.end = max(prev.end, note.end)
                 continue
 
@@ -195,11 +191,7 @@ def _stabilize_midi_notes(midi_data: object) -> None:
             prev = stabilized[-1]
             nxt = merged[idx + 1]
             note_dur = note.end - note.start
-            if (
-                note_dur <= 0.24
-                and prev.pitch == nxt.pitch
-                and abs(note.pitch - prev.pitch) <= 2
-            ):
+            if note_dur <= 0.08 and prev.pitch == nxt.pitch and note.pitch == prev.pitch:
                 prev.end = max(prev.end, nxt.end)
                 continue
 
