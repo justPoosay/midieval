@@ -550,6 +550,7 @@ class _ConversionJobState {
 class _JumpingNotesOverlay extends StatelessWidget {
   const _JumpingNotesOverlay({super.key});
 
+  // ignore: unused_field
   static const _particles =
       <(double x, double delay, double size, String note, Color color)>[
         (0.12, 0.00, 30, '♪', Color(0xFF6EE7FF)),
@@ -566,45 +567,69 @@ class _JumpingNotesOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     return TweenAnimationBuilder<double>(
       tween: Tween<double>(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 1450),
-      curve: Curves.easeOutCubic,
+      duration: const Duration(milliseconds: 1600),
+      curve: Curves.easeOutQuart,
       builder: (context, value, _) {
         return LayoutBuilder(
           builder: (context, constraints) {
             final width = constraints.maxWidth;
             final height = constraints.maxHeight;
 
+            final centerX = width * 0.5;
+            final centerY = height * 0.56;
+            const glyphs = ['*', '+', 'o', 'x', '.'];
+            const colors = <Color>[
+              Color(0xFF6EE7FF),
+              Color(0xFFC084FC),
+              Color(0xFFFFD166),
+              Color(0xFF8BFFB7),
+            ];
             return Stack(
-              children: _particles.map((p) {
-                final progress = ((value - p.$2) / (1 - p.$2)).clamp(0.0, 1.0);
-                final y = height * (0.82 - (progress * 0.62));
-                final sway = math.sin((progress * math.pi * 2) + p.$1 * 3) * 12;
-                final alpha = (1 - progress).clamp(0.0, 1.0);
+              children: List<Widget>.generate(44, (i) {
+                final localDelay = (i % 11) * 0.025;
+                final p = ((value - localDelay) / (1 - localDelay)).clamp(
+                  0.0,
+                  1.0,
+                );
+                if (p <= 0) return const SizedBox.shrink();
+                final angle = ((i * 33) % 360) * (math.pi / 180.0);
+                final speed = 110.0 + ((i * 19) % 140);
+                final flight = Curves.easeOut.transform(p);
+                final dx = math.cos(angle) * speed * flight;
+                final dy = math.sin(angle) * speed * flight + (190.0 * p * p);
+                final spin = (i.isEven ? 1 : -1) * (p * math.pi * 2.6);
+                final alpha = (1.0 - p).clamp(0.0, 1.0);
+                final size = 10.0 + (i % 5) * 4.0;
+                final glyph = glyphs[i % glyphs.length];
+                final color = colors[i % colors.length];
                 return Positioned(
-                  left: (width * p.$1) + sway,
-                  top: y,
+                  left: centerX + dx,
+                  top: centerY + dy,
                   child: Opacity(
                     opacity: alpha,
-                    child: Transform.scale(
-                      scale: 0.8 + (progress * 0.45),
-                      child: Text(
-                        p.$4,
-                        style: TextStyle(
-                          fontSize: p.$3,
-                          fontWeight: FontWeight.w800,
-                          color: p.$5,
-                          shadows: [
-                            Shadow(
-                              color: p.$5.withValues(alpha: 0.65),
-                              blurRadius: 16,
-                            ),
-                          ],
+                    child: Transform.rotate(
+                      angle: spin,
+                      child: Transform.scale(
+                        scale: 0.85 + ((1 - p) * 0.35),
+                        child: Text(
+                          glyph,
+                          style: TextStyle(
+                            fontSize: size,
+                            fontWeight: FontWeight.w900,
+                            color: color,
+                            shadows: [
+                              Shadow(
+                                color: color.withValues(alpha: 0.55),
+                                blurRadius: 10,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
                 );
-              }).toList(),
+              }),
             );
           },
         );
