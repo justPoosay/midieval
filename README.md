@@ -108,6 +108,9 @@ Rule going forward: before each commit, this section is updated.
 - [x] Prepare local ML rhythm experiment route (`tool/ml_midi`) and training docs (archived path).
 - [x] Add bridge docs for TorchCrepe and Basic Pitch routes.
 - [x] Refactor `main.dart` into a thin bootstrap entry and move app implementation into dedicated files.
+- [x] Split app implementation into focused files (`app_shell`, `profile_settings_page`, `home_page`, `midi_editor_dialog`).
+- [x] Tune close-note handling to reduce accidental merges and preserve nearby melodic steps.
+- [x] Improve key/scale constraint snapping with context-aware melodic direction scoring.
 - [] Add hosted/production bridge reliability strategy (timeouts, retries, health fallback).
 - [] Consider moving bridge inference on-device/native for mobile (future architecture option).
 - [] Add smart rhythm repair presets (`Tight`, `Natural`, `Legato`, `Staccato`) that switch quantize/snap behavior profiles.

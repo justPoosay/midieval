@@ -210,10 +210,10 @@ def _stabilize_midi_notes(midi_data: object) -> None:
             d_next = abs(nxt.pitch - note.pitch)
             d_outer = abs(nxt.pitch - prev.pitch)
 
-            is_short_blip = note_dur <= 0.14
+            is_short_blip = note_dur <= 0.10
             tightly_connected = gap_prev <= 0.10 and gap_next <= 0.10
-            neighbors_stronger = prev_dur >= 0.10 and next_dur >= 0.10
-            local_connector_shape = d_prev <= 2 and d_next <= 2 and d_outer >= 3
+            neighbors_stronger = prev_dur >= 0.14 and next_dur >= 0.14
+            local_connector_shape = d_prev <= 2 and d_next <= 2 and d_outer >= 4
 
             if is_short_blip and tightly_connected and neighbors_stronger and local_connector_shape:
                 prev.end = max(prev.end, note.end)
@@ -221,11 +221,11 @@ def _stabilize_midi_notes(midi_data: object) -> None:
 
             final_notes.append(note)
 
-        # Pass 5: suppress micro-notes (<=120ms) unless likely intentional.
+        # Pass 5: suppress micro-notes (<=90ms) unless likely intentional.
         filtered: list = []
         for idx, note in enumerate(final_notes):
             dur = note.end - note.start
-            if dur > 0.12:
+            if dur > 0.09:
                 filtered.append(note)
                 continue
 
