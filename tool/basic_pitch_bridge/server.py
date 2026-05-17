@@ -137,7 +137,6 @@ def _stabilize_midi_notes(midi_data: object) -> None:
     instruments = getattr(midi_data, "instruments", None)
     if instruments is None:
         return
-
     for instrument in instruments:
         notes = sorted(getattr(instrument, "notes", []), key=lambda n: n.start)
         if not notes:
@@ -148,7 +147,7 @@ def _stabilize_midi_notes(midi_data: object) -> None:
         if not cleaned:
             cleaned = notes
 
-        # Pass 2: merge adjacent near-unison/semitone wobble into stable notes.
+        # Pass 2: merge adjacent near-unison wobble into stable notes.
         merged: list = []
         for note in cleaned:
             if not merged:
@@ -161,20 +160,16 @@ def _stabilize_midi_notes(midi_data: object) -> None:
             note_dur = note.end - note.start
             prev_dur = prev.end - prev.start
 
-            # Very short near-unison blips are treated as shimmer.
-            # Keep semitone neighbors (E/F, B/C, etc.) so scale motion survives.
             if gap <= 0.08 and pitch_diff == 0 and note_dur <= 0.12:
                 prev.end = max(prev.end, note.end)
                 prev.velocity = max(prev.velocity, note.velocity)
                 continue
 
-            # If same (or very close) pitch with tiny gap, fuse them.
             if gap <= 0.12 and pitch_diff == 0:
                 prev.end = max(prev.end, note.end)
                 prev.velocity = max(prev.velocity, note.velocity)
                 continue
 
-            # Keep this guard strict: only absorb ultra-short exact-repeat artifacts.
             if gap <= 0.06 and pitch_diff == 0 and note_dur <= 0.08 and prev_dur >= 0.06:
                 prev.end = max(prev.end, note.end)
                 continue
@@ -197,4 +192,62 @@ def _stabilize_midi_notes(midi_data: object) -> None:
 
             stabilized.append(note)
 
-        instrument.notes = stabilized
+        # Pass 4: remove ultra-short connector blips between two stronger notes.
+        final_notes: list = []
+        for idx, note in enumerate(stabilized):
+            if idx == 0 or idx == len(stabilized) - 1:
+                final_notes.append(note)
+                continue
+
+            prev = final_notes[-1]
+            nxt = stabilized[idx + 1]
+            note_dur = note.end - note.start
+            prev_dur = prev.end - prev.start
+            next_dur = nxt.end - nxt.start
+            gap_prev = note.start - prev.end
+            gap_next = nxt.start - note.end
+            d_prev = abs(note.pitch - prev.pitch)
+            d_next = abs(nxt.pitch - note.pitch)
+            d_outer = abs(nxt.pitch - prev.pitch)
+
+            is_short_blip = note_dur <= 0.14
+            tightly_connected = gap_prev <= 0.10 and gap_next <= 0.10
+            neighbors_stronger = prev_dur >= 0.10 and next_dur >= 0.10
+            local_connector_shape = d_prev <= 2 and d_next <= 2 and d_outer >= 3
+
+            if is_short_blip and tightly_connected and neighbors_stronger and local_connector_shape:
+                prev.end = max(prev.end, note.end)
+                continue
+
+            final_notes.append(note)
+
+        # Pass 5: suppress micro-notes (<=120ms) unless likely intentional.
+        filtered: list = []
+        for idx, note in enumerate(final_notes):
+            dur = note.end - note.start
+            if dur > 0.12:
+                filtered.append(note)
+                continue
+
+            prev = filtered[-1] if filtered else None
+            nxt = final_notes[idx + 1] if idx + 1 < len(final_notes) else None
+
+            prev_gap = (note.start - prev.end) if prev is not None else 999.0
+            next_gap = (nxt.start - note.end) if nxt is not None else 999.0
+            same_as_prev = prev is not None and note.pitch == prev.pitch
+            same_as_next = nxt is not None and note.pitch == nxt.pitch
+            neighbor_motion = (
+                abs(note.pitch - prev.pitch) if prev is not None else 99
+            ) + (abs(nxt.pitch - note.pitch) if nxt is not None else 99)
+            strong_velocity = getattr(note, "velocity", 0) >= 95
+
+            isolated_onset = prev_gap >= 0.11 or next_gap >= 0.11
+            repeated_pitch_anchor = same_as_prev or same_as_next
+            melodic_anchor = neighbor_motion >= 5 and prev_gap >= 0.06 and next_gap >= 0.06
+
+            if repeated_pitch_anchor or isolated_onset or melodic_anchor or strong_velocity:
+                filtered.append(note)
+                continue
+            # else: drop unanchored micro blip
+
+        instrument.notes = filtered if filtered else final_notes
