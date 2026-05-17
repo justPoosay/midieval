@@ -100,25 +100,19 @@ Rule going forward: before each commit, this section is updated.
 - [x] Keep sketch titles stable after conversion (do not overwrite with temporary MIDI label).
 - [x] Change Supabase Storage naming to deterministic `recording_x` style (no timestamp).
 - [x] Enable deterministic-name uploads with safe overwrite (`upsert`) for WAV.
-- [x] Add diagnostics engine: BPM, meter guess, key guess, confidence, unstable pitch regions.
-- [x] Persist diagnostics to Supabase (`diagnostics` JSON + `diagnostics_updated_at`).
-- [x] Hydrate diagnostics from DB when loading sketches.
-- [x] Show diagnostics inline as expandable section directly under sketch cards.
-- [x] Keep diagnostics accessible by quick analytics action in sketch row.
+- [x] Add and later remove diagnostics experiments to return to the stable pre-diagnostics conversion path.
 - [x] README rewrite in English with clearer project/problem description.
 - [x] Add prototype GIF section in README.
 - [x] Add algorithm pipeline SVG to README.
 - [x] Add detailed "Problem This Project Tackles" explanation in README.
 - [x] Prepare local ML rhythm experiment route (`tool/ml_midi`) and training docs (archived path).
 - [x] Add bridge docs for TorchCrepe and Basic Pitch routes.
-- [] Improve diagnostics confidence quality/scoring calibration (currently coarse heuristic).
-- [] Add richer diagnostics persistence model (optional `conversion_runs` history table).
 - [] Add hosted/production bridge reliability strategy (timeouts, retries, health fallback).
 - [] Consider moving bridge inference on-device/native for mobile (future architecture option).
 - [] Add smart rhythm repair presets (`Tight`, `Natural`, `Legato`, `Staccato`) that switch quantize/snap behavior profiles.
-- [] Add export pack feature: bundle `.mid` + `original.wav` + `cleaned.wav` + diagnostics JSON into one `.zip` for debugging/training.
+- [] Add export pack feature: bundle `.mid` + `original.wav` + `cleaned.wav` + conversion analysis JSON into one `.zip` for debugging/training.
 - [] Add first-run in-app tutorial overlay (~30 sec): `record -> convert -> quantize -> edit -> apply`.
-- [] Improve core conversion algorithm quality (pitch + rhythm) based on diagnostics feedback; reduce current high-error cases.
+- [] Improve core conversion algorithm quality (pitch + rhythm) and reduce current high-error cases.
 
 ## Prototype Versions
 
