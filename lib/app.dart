@@ -20,6 +20,7 @@ part 'app_shell.dart';
 part 'profile_settings_page.dart';
 part 'home_page.dart';
 part 'midi_editor_dialog.dart';
+part 'tutorial_callout.dart';
 
 const String _brandLogoAsset = 'assets/branding/logo_concept.svg';
 const String _brandLogoMarkAsset = 'assets/branding/logo_mark.svg';

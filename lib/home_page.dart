@@ -262,6 +262,19 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _constrainToScale = false;
   String _selectedKey = 'C';
   String _selectedScale = 'Major';
+  bool _tutorialActive = false;
+  int _tutorialStep = 0;
+  static const int _tutorialStepRecord = 0;
+  static const int _tutorialStepPlayRename = 1;
+  static const int _tutorialStepConversion = 2;
+  static const int _tutorialStepTopActions = 3;
+  static const int _tutorialStepSettings = 4;
+  final GlobalKey _recordCardKey = GlobalKey();
+  final GlobalKey _conversionCardKey = GlobalKey();
+  final GlobalKey _topActionsKey = GlobalKey();
+  final GlobalKey _settingsIconKey = GlobalKey();
+  final GlobalKey _firstSketchActionsKey = GlobalKey();
+  static bool _tutorialShownThisSession = false;
   bool _isGeneratingMidiPreview = false;
   bool _showJumpingNotes = false;
   int _jumpingNotesSeed = 0;
@@ -276,6 +289,12 @@ class _MyHomePageState extends State<MyHomePage> {
     super.initState();
     _sketchesFuture = getSketches();
     unawaited(_configureAudioPlayer());
+    if (!_tutorialShownThisSession) {
+      _tutorialShownThisSession = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _startTutorial();
+      });
+    }
     _playerCompleteSubscription = audioPlayer.onPlayerComplete.listen((_) {
       _clearPlayingSketch();
     });
@@ -376,6 +395,65 @@ class _MyHomePageState extends State<MyHomePage> {
             !sessionPaths.contains(sketch['audio_path']),
       ),
     ];
+  }
+
+  void _startTutorial() {
+    if (!mounted) return;
+    setState(() {
+      _tutorialActive = true;
+      _tutorialStep = _tutorialStepRecord;
+    });
+  }
+
+  void _finishTutorial() {
+    if (!mounted) return;
+    setState(() {
+      _tutorialActive = false;
+      _tutorialStep = 0;
+    });
+  }
+
+  void _advanceTutorial() {
+    if (!_tutorialActive) return;
+    if (_tutorialStep >= _tutorialStepSettings) {
+      _finishTutorial();
+      return;
+    }
+    setState(() => _tutorialStep++);
+  }
+
+  String _tutorialHint() {
+    switch (_tutorialStep) {
+      case _tutorialStepRecord:
+        return 'Record a melody here. Tap once to start and once to stop.';
+      case _tutorialStepPlayRename:
+        return 'Use these actions on a sketch card to rename and play clips.';
+      case _tutorialStepConversion:
+        return 'Open conversion settings to control tempo, meter, and key/scale.';
+      case _tutorialStepTopActions:
+        return 'Top actions: generate a random melody and refresh the list.';
+      case _tutorialStepSettings:
+        return 'Open profile/settings from here.';
+      default:
+        return '';
+    }
+  }
+
+  GlobalKey? _tutorialTargetKey() {
+    switch (_tutorialStep) {
+      case _tutorialStepRecord:
+        return _recordCardKey;
+      case _tutorialStepPlayRename:
+        return _firstSketchActionsKey;
+      case _tutorialStepConversion:
+        return _conversionCardKey;
+      case _tutorialStepTopActions:
+        return _topActionsKey;
+      case _tutorialStepSettings:
+        return _settingsIconKey;
+      default:
+        return null;
+    }
   }
 
   int _nextRecordingIndex() {
@@ -1510,6 +1588,12 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
         actions: [
           IconButton(
+            tooltip: 'Tutorial',
+            icon: const Icon(Icons.help_outline),
+            onPressed: _startTutorial,
+          ),
+          IconButton(
+            key: _settingsIconKey,
             tooltip: context.tr('settings'),
             icon: const Icon(Icons.settings),
             onPressed: () async {
@@ -1560,6 +1644,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
                   child: Material(
+                    key: _recordCardKey,
                     color: isRecording
                         ? const Color(0xFF2B1B24)
                         : const Color(0xFF131A2B),
@@ -1648,6 +1733,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                   child: Material(
+                    key: _conversionCardKey,
                     color: const Color(0xFF131A2B),
                     borderRadius: BorderRadius.circular(20),
                     clipBehavior: Clip.antiAlias,
@@ -1737,6 +1823,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                   child: Row(
+                    key: _topActionsKey,
                     children: [
                       Text(
                         context.tr('sketches'),
@@ -1865,6 +1952,9 @@ class _MyHomePageState extends State<MyHomePage> {
                                         ),
                                 ),
                                 trailing: Wrap(
+                                  key: index == 0
+                                      ? _firstSketchActionsKey
+                                      : null,
                                   spacing: 12, // odstęp między ikonami
                                   children: [
                                     IconButton(
@@ -1936,6 +2026,7 @@ class _MyHomePageState extends State<MyHomePage> {
               ],
             ),
           ),
+          if (_tutorialActive) _buildTutorialOverlay(colorScheme),
           if (_showJumpingNotes)
             Positioned.fill(
               child: IgnorePointer(
@@ -1952,6 +2043,81 @@ class _MyHomePageState extends State<MyHomePage> {
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildTutorialOverlay(ColorScheme colorScheme) {
+    return Positioned.fill(
+      child: Builder(
+        builder: (overlayContext) {
+          final targetKey = _tutorialTargetKey();
+          final targetCenter = targetKey == null
+              ? null
+              : _targetCenterInOverlay(
+                  overlayContext: overlayContext,
+                  targetKey: targetKey,
+                );
+          final size = MediaQuery.of(overlayContext).size;
+          final cardTop = targetCenter == null
+              ? 88.0
+              : targetCenter.dy < size.height * 0.5
+              ? (size.height * 0.62).clamp(96.0, size.height - 190)
+              : 86.0;
+          final cardRect = Rect.fromLTWH(12, cardTop, size.width - 24, 124);
+
+          return Stack(
+            children: [
+              AbsorbPointer(
+                absorbing: true,
+                child: Container(color: Colors.black.withValues(alpha: 0.48)),
+              ),
+              if (targetCenter != null)
+                _TutorialCurvedArrow(
+                  start: _anchorPointOnRect(cardRect, targetCenter),
+                  end: targetCenter,
+                ),
+              Positioned(
+                top: cardTop,
+                left: 12,
+                right: 12,
+                child: _buildTutorialCard(colorScheme),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildTutorialCard(ColorScheme colorScheme) {
+    return Material(
+      color: const Color(0xEE111A2D),
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.cyanAccent.withValues(alpha: 0.45)),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.auto_awesome, color: colorScheme.primary, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _tutorialHint(),
+                style: const TextStyle(fontSize: 12.5),
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton(
+              onPressed: _advanceTutorial,
+              child: const Text('Next ->'),
+            ),
+            TextButton(onPressed: _finishTutorial, child: const Text('Skip')),
+          ],
+        ),
       ),
     );
   }

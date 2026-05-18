@@ -119,7 +119,8 @@ Rule going forward: before each commit, this section is updated.
 - [] Consider moving bridge inference on-device/native for mobile (future architecture option).
 - [] Add smart rhythm repair presets (`Tight`, `Natural`, `Legato`, `Staccato`) that switch quantize/snap behavior profiles.
 - [] Add export pack feature: bundle `.mid` + `original.wav` + `cleaned.wav` + conversion analysis JSON into one `.zip` for debugging/training.
-- [] Add first-run in-app tutorial overlay (~30 sec): `record -> convert -> quantize -> edit -> apply`.
+- [x] Add first-run in-app tutorial overlay (~30 sec): `record -> convert -> quantize -> edit -> apply`, with auto-seeded C-major demo sketch for new accounts.
+- [x] Upgrade tutorial UX to anchored overlay callouts with curved arrows pointing directly to key UI controls.
 - [] Improve core conversion algorithm quality (pitch + rhythm) and reduce current high-error cases.
 
 ## Prototype Versions

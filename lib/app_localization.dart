@@ -71,6 +71,16 @@ class AppStrings {
     'random_melody_generated': 'Random melody generated',
     'random_melody_failed': 'Random melody failed',
     'done': 'Done',
+    'tutorial_title': 'Quick Tutorial',
+    'tutorial_skip': 'Skip',
+    'tutorial_convert_hint':
+        'Step 1/4: Tap Convert on the seeded C-major tutorial sketch.',
+    'tutorial_quantize_hint':
+        'Step 2/4: Use Quantize to align notes to the grid.',
+    'tutorial_edit_hint': 'Step 3/4: Drag or resize a note to edit the melody.',
+    'tutorial_apply_hint':
+        'Step 4/4: Press Apply to confirm and save the MIDI preview.',
+    'tutorial_seed_title': 'Tutorial C Major Scale',
   };
 
   static const Map<String, String> _pl = {
@@ -118,6 +128,17 @@ class AppStrings {
     'random_melody_generated': 'Wygenerowano losowa melodie',
     'random_melody_failed': 'Generowanie losowej melodii nie powiodlo sie',
     'done': 'Gotowe',
+    'tutorial_title': 'Szybki samouczek',
+    'tutorial_skip': 'Pomin',
+    'tutorial_convert_hint':
+        'Krok 1/4: Dotknij Konwertuj na szkicu samouczka C-dur.',
+    'tutorial_quantize_hint':
+        'Krok 2/4: Uzyj Quantize, aby wyrownac nuty do siatki.',
+    'tutorial_edit_hint':
+        'Krok 3/4: Przeciagnij lub rozciagnij note, aby edytowac melodie.',
+    'tutorial_apply_hint':
+        'Krok 4/4: Nacisnij Apply, aby potwierdzic i zapisac podglad MIDI.',
+    'tutorial_seed_title': 'Samouczek Skala C-dur',
   };
 
   static String of(BuildContext context, String key) {

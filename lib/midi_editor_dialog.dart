@@ -8,6 +8,8 @@ class MidiEditorDialog extends StatefulWidget {
     required this.beatsPerMeasureOverride,
     required this.beatUnitOverride,
     this.keyScaleConstraint,
+    this.tutorialMode = false,
+    this.onTutorialCompleted,
   });
 
   final ParsedMidi parsed;
@@ -15,6 +17,8 @@ class MidiEditorDialog extends StatefulWidget {
   final int beatsPerMeasureOverride;
   final int beatUnitOverride;
   final KeyScaleConstraint? keyScaleConstraint;
+  final bool tutorialMode;
+  final VoidCallback? onTutorialCompleted;
 
   @override
   State<MidiEditorDialog> createState() => _MidiEditorDialogState();
@@ -37,6 +41,7 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
   final Set<int> _erasedIndices = <int>{};
   _MoveDragContext? _moveDrag;
   _ResizeDragContext? _resizeDrag;
+  int _tutorialEditorStep = 0;
 
   @override
   void initState() {
@@ -84,7 +89,27 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
       _notes.sort((a, b) => a.startTick.compareTo(b.startTick));
       _ensureTimelineCoversAll();
       _stopPreviewIfOutOfRange();
+      if (widget.tutorialMode && _tutorialEditorStep == 0) {
+        _tutorialEditorStep = 1;
+      }
     });
+  }
+
+  void _advanceTutorialEditorStep() {
+    if (!widget.tutorialMode) return;
+    if (_tutorialEditorStep >= 4) {
+      widget.onTutorialCompleted?.call();
+      if (mounted) Navigator.pop(context);
+      return;
+    }
+    setState(() => _tutorialEditorStep++);
+  }
+
+  void _onTutorialEditObserved() {
+    if (!widget.tutorialMode) return;
+    if (_tutorialEditorStep < 3) {
+      _tutorialEditorStep = 3;
+    }
   }
 
   void _intelligentQuantize() {
@@ -433,6 +458,22 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     _notes.sort((a, b) => a.startTick.compareTo(b.startTick));
     _selectedIndex = _notes.indexOf(newNote);
     _ensureTimelineCoversAll();
+    _onTutorialEditObserved();
+  }
+
+  String _tutorialEditorHint(BuildContext context) {
+    switch (_tutorialEditorStep) {
+      case 0:
+        return 'MIDI Preview: top toolbar actions (delete/undo/redo/grid)';
+      case 1:
+        return 'MIDI Preview: play/rewind transport controls';
+      case 2:
+        return 'MIDI Preview: piano roll grid and timeline';
+      case 3:
+        return 'MIDI Preview: note blocks (drag, resize, double-click add)';
+      default:
+        return 'MIDI Preview: press Apply when your edits are done';
+    }
   }
 
   int _initialTimelineTickEnd(List<EditableMidiNote> notes) {
@@ -488,6 +529,7 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     note.startTick = math.max(0, ctx.startTick + rawTickDelta);
     note.note = (ctx.startNote - rawPitchDelta).clamp(0, 127);
     _ensureTimelineCoversAll();
+    _onTutorialEditObserved();
   }
 
   void _endMoveDrag(int index) {
@@ -536,6 +578,7 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
       note.durationTicks = newDuration;
     }
     _ensureTimelineCoversAll();
+    _onTutorialEditObserved();
   }
 
   void _endResizeDrag(int index) {
@@ -808,142 +851,189 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
                   ),
                   const SizedBox(height: 8),
                   Expanded(
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final noteSpan = math.max(12, maxNote - minNote + 1);
-                        final laneHeight = constraints.maxHeight / noteSpan;
-                        return Container(
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF111216),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: LayoutBuilder(
-                            builder: (context, inner) {
-                              final tickScale =
-                                  inner.maxWidth / math.max(1, tickEnd);
-                              final barTicks =
-                                  ((widget.parsed.ticksPerQuarter *
-                                              4 *
-                                              widget.beatsPerMeasureOverride) /
-                                          widget.beatUnitOverride)
-                                      .round();
-                              final beatTicks =
-                                  ((widget.parsed.ticksPerQuarter * 4) /
-                                          widget.beatUnitOverride)
-                                      .round();
-                              return Listener(
-                                onPointerDown: (event) {
-                                  if ((event.buttons & kSecondaryMouseButton) !=
-                                      0) {
-                                    _commitUndoState();
-                                    setState(() {
-                                      _erasePointer = event.pointer;
-                                      _erasedIndices.clear();
-                                      _eraseAtPosition(
-                                        event.localPosition,
-                                        maxNote: maxNote,
-                                        laneHeight: laneHeight,
-                                        tickScale: tickScale,
-                                      );
-                                    });
-                                  }
-                                },
-                                onPointerMove: (event) {
-                                  if (_erasePointer == event.pointer &&
-                                      (event.buttons & kSecondaryMouseButton) !=
-                                          0) {
-                                    setState(() {
-                                      _eraseAtPosition(
-                                        event.localPosition,
-                                        maxNote: maxNote,
-                                        laneHeight: laneHeight,
-                                        tickScale: tickScale,
-                                      );
-                                    });
-                                  }
-                                },
-                                onPointerUp: (event) {
-                                  if (_erasePointer == event.pointer) {
-                                    setState(() {
-                                      _erasePointer = null;
-                                      _erasedIndices.clear();
-                                    });
-                                  }
-                                },
-                                child: GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onDoubleTapDown: (details) {
-                                    setState(() {
-                                      _addNoteAtPosition(
-                                        details.localPosition,
-                                        maxNote: maxNote,
-                                        laneHeight: laneHeight,
-                                        tickScale: tickScale,
-                                      );
-                                    });
-                                  },
-                                  child: Stack(
-                                    children: [
-                                      for (
-                                        var tick = 0;
-                                        tick <= tickEnd;
-                                        tick += _gridTick()
-                                      )
-                                        Positioned(
-                                          left: tick * tickScale,
-                                          top: 0,
-                                          bottom: 0,
-                                          child: Container(
-                                            width: tick % barTicks == 0 ? 2 : 1,
-                                            color: tick % barTicks == 0
-                                                ? const Color(0xFF3A3F4D)
-                                                : tick % beatTicks == 0
-                                                ? const Color(0xFF2A2D36)
-                                                : const Color(0xFF1A1C22),
-                                          ),
-                                        ),
-                                      for (var i = 0; i <= noteSpan; i++)
-                                        Positioned(
-                                          top: i * laneHeight,
-                                          left: 0,
-                                          right: 0,
-                                          child: Container(
-                                            height: 1,
-                                            color: const Color(0xFF1E2128),
-                                          ),
-                                        ),
-                                      if (_isPreviewPlaying ||
-                                          _playheadTick > 0)
-                                        Positioned(
-                                          left: (_playheadTick * tickScale)
-                                              .clamp(0.0, inner.maxWidth - 1),
-                                          top: 0,
-                                          bottom: 0,
-                                          child: Container(
-                                            width: 2,
-                                            color: Colors.redAccent,
-                                          ),
-                                        ),
-                                      for (var i = 0; i < _notes.length; i++)
-                                        _buildNoteRect(
-                                          i,
-                                          _notes[i],
+                    child: AbsorbPointer(
+                      absorbing: widget.tutorialMode,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final noteSpan = math.max(12, maxNote - minNote + 1);
+                          final laneHeight = constraints.maxHeight / noteSpan;
+                          return Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF111216),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: LayoutBuilder(
+                              builder: (context, inner) {
+                                final tickScale =
+                                    inner.maxWidth / math.max(1, tickEnd);
+                                final barTicks =
+                                    ((widget.parsed.ticksPerQuarter *
+                                                4 *
+                                                widget
+                                                    .beatsPerMeasureOverride) /
+                                            widget.beatUnitOverride)
+                                        .round();
+                                final beatTicks =
+                                    ((widget.parsed.ticksPerQuarter * 4) /
+                                            widget.beatUnitOverride)
+                                        .round();
+                                return Listener(
+                                  onPointerDown: (event) {
+                                    if ((event.buttons &
+                                            kSecondaryMouseButton) !=
+                                        0) {
+                                      _commitUndoState();
+                                      setState(() {
+                                        _erasePointer = event.pointer;
+                                        _erasedIndices.clear();
+                                        _eraseAtPosition(
+                                          event.localPosition,
                                           maxNote: maxNote,
                                           laneHeight: laneHeight,
                                           tickScale: tickScale,
-                                          showConfidenceHeatmap:
-                                              _showConfidenceHeatmap,
-                                        ),
-                                    ],
+                                        );
+                                      });
+                                    }
+                                  },
+                                  onPointerMove: (event) {
+                                    if (_erasePointer == event.pointer &&
+                                        (event.buttons &
+                                                kSecondaryMouseButton) !=
+                                            0) {
+                                      setState(() {
+                                        _eraseAtPosition(
+                                          event.localPosition,
+                                          maxNote: maxNote,
+                                          laneHeight: laneHeight,
+                                          tickScale: tickScale,
+                                        );
+                                      });
+                                    }
+                                  },
+                                  onPointerUp: (event) {
+                                    if (_erasePointer == event.pointer) {
+                                      setState(() {
+                                        _erasePointer = null;
+                                        _erasedIndices.clear();
+                                      });
+                                    }
+                                  },
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onDoubleTapDown: (details) {
+                                      setState(() {
+                                        _addNoteAtPosition(
+                                          details.localPosition,
+                                          maxNote: maxNote,
+                                          laneHeight: laneHeight,
+                                          tickScale: tickScale,
+                                        );
+                                      });
+                                    },
+                                    child: Stack(
+                                      children: [
+                                        for (
+                                          var tick = 0;
+                                          tick <= tickEnd;
+                                          tick += _gridTick()
+                                        )
+                                          Positioned(
+                                            left: tick * tickScale,
+                                            top: 0,
+                                            bottom: 0,
+                                            child: Container(
+                                              width: tick % barTicks == 0
+                                                  ? 2
+                                                  : 1,
+                                              color: tick % barTicks == 0
+                                                  ? const Color(0xFF3A3F4D)
+                                                  : tick % beatTicks == 0
+                                                  ? const Color(0xFF2A2D36)
+                                                  : const Color(0xFF1A1C22),
+                                            ),
+                                          ),
+                                        for (var i = 0; i <= noteSpan; i++)
+                                          Positioned(
+                                            top: i * laneHeight,
+                                            left: 0,
+                                            right: 0,
+                                            child: Container(
+                                              height: 1,
+                                              color: const Color(0xFF1E2128),
+                                            ),
+                                          ),
+                                        if (_isPreviewPlaying ||
+                                            _playheadTick > 0)
+                                          Positioned(
+                                            left: (_playheadTick * tickScale)
+                                                .clamp(0.0, inner.maxWidth - 1),
+                                            top: 0,
+                                            bottom: 0,
+                                            child: Container(
+                                              width: 2,
+                                              color: Colors.redAccent,
+                                            ),
+                                          ),
+                                        for (var i = 0; i < _notes.length; i++)
+                                          _buildNoteRect(
+                                            i,
+                                            _notes[i],
+                                            maxNote: maxNote,
+                                            laneHeight: laneHeight,
+                                            tickScale: tickScale,
+                                            showConfidenceHeatmap:
+                                                _showConfidenceHeatmap,
+                                          ),
+                                      ],
+                                    ),
                                   ),
-                                ),
-                              );
-                            },
-                          ),
-                        );
-                      },
+                                );
+                              },
+                            ),
+                          );
+                        },
+                      ),
                     ),
                   ),
+                  if (widget.tutorialMode)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.35),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: Colors.cyanAccent.withValues(alpha: 0.45),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.lightbulb_outline,
+                              size: 18,
+                              color: Colors.cyanAccent,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _tutorialEditorHint(context),
+                                style: const TextStyle(fontSize: 12.5),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            FilledButton(
+                              onPressed: _advanceTutorialEditorStep,
+                              child: const Text('Next ->'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -952,18 +1042,19 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
                 onPressed: () => Navigator.pop(context),
                 child: const Text('Cancel'),
               ),
-              FilledButton(
-                onPressed: () {
-                  final output = widget.parsed.rebuild(
-                    _notes,
-                    tempoOverrideBpm: widget.tempoOverrideBpm,
-                    beatsPerMeasureOverride: widget.beatsPerMeasureOverride,
-                    beatUnitOverride: widget.beatUnitOverride,
-                  );
-                  Navigator.pop(context, output);
-                },
-                child: const Text('Apply'),
-              ),
+              if (!widget.tutorialMode)
+                FilledButton(
+                  onPressed: () {
+                    final output = widget.parsed.rebuild(
+                      _notes,
+                      tempoOverrideBpm: widget.tempoOverrideBpm,
+                      beatsPerMeasureOverride: widget.beatsPerMeasureOverride,
+                      beatUnitOverride: widget.beatUnitOverride,
+                    );
+                    Navigator.pop(context, output);
+                  },
+                  child: const Text('Apply'),
+                ),
             ],
           ),
         ),
