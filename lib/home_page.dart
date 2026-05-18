@@ -739,7 +739,7 @@ class _MyHomePageState extends State<MyHomePage> {
         _clearPlayingSketch();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text("Nie udało się odtworzyć klipu: $e"),
+            content: Text('${context.tr('playback_failed')}: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -813,10 +813,13 @@ class _MyHomePageState extends State<MyHomePage> {
         (bytes[offset + 3] << 24);
   }
 
-  Future<Uint8List> _downloadAudioBytes(String audioUrl) async {
+  Future<Uint8List> _downloadAudioBytes(
+    String audioUrl, {
+    required String downloadFailedMessage,
+  }) async {
     final response = await http.get(Uri.parse(audioUrl));
     if (response.statusCode != 200) {
-      throw Exception("Nie udało się pobrać pliku audio");
+      throw Exception(downloadFailedMessage);
     }
     return response.bodyBytes;
   }
@@ -894,7 +897,10 @@ class _MyHomePageState extends State<MyHomePage> {
       if (await localAudioFile.exists()) {
         audioBytes = await localAudioFile.readAsBytes();
       } else {
-        audioBytes = await _downloadAudioBytes(audioUrl);
+        audioBytes = await _downloadAudioBytes(
+          audioUrl,
+          downloadFailedMessage: 'Could not download audio file',
+        );
       }
 
       // 3. Wywołujemy silnik z osobnego pliku (ten, który ma tylko 1 nutę)
@@ -954,7 +960,10 @@ class _MyHomePageState extends State<MyHomePage> {
       debugPrint("BŁĄD KONWERSJI: $e");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Błąd: $e"), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text('${context.tr('error_prefix')}: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } finally {
@@ -1765,7 +1774,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                                   item['title']?.toString() ??
                                                   'Recording',
                                             ),
-                                      tooltip: 'Rename',
+                                      tooltip: context.tr('rename'),
                                     ),
                                     IconButton(
                                       icon: const Icon(
@@ -1780,7 +1789,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                               audioPath,
                                               itemId,
                                             ),
-                                      tooltip: "Konwertuj na MIDI",
+                                      tooltip: context.tr('convert_to_midi'),
                                     ),
                                     IconButton(
                                       icon: isLoading
@@ -1803,8 +1812,8 @@ class _MyHomePageState extends State<MyHomePage> {
                                       onPressed: () =>
                                           playOrStopSketch(itemId, audioPath),
                                       tooltip: isPlaying
-                                          ? "Zatrzymaj odtwarzanie"
-                                          : "Odtwórz klip",
+                                          ? context.tr('stop_playback')
+                                          : context.tr('play_clip'),
                                     ),
                                   ],
                                 ),

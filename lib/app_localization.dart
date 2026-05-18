@@ -62,6 +62,15 @@ class AppStrings {
     'scale_off': 'Key/Scale: unconstrained',
     'sketches': 'Sketches',
     'no_sketches': 'No sketches yet',
+    'rename': 'Rename',
+    'convert_to_midi': 'Convert to MIDI',
+    'play_clip': 'Play clip',
+    'stop_playback': 'Stop playback',
+    'playback_failed': 'Could not play clip',
+    'audio_download_failed': 'Could not download audio file',
+    'random_melody_generated': 'Random melody generated',
+    'random_melody_failed': 'Random melody failed',
+    'done': 'Done',
   };
 
   static const Map<String, String> _pl = {
@@ -100,6 +109,15 @@ class AppStrings {
     'scale_off': 'Tonacja/Skala: bez ograniczen',
     'sketches': 'Szkice',
     'no_sketches': 'Brak szkicow',
+    'rename': 'Zmien nazwe',
+    'convert_to_midi': 'Konwertuj na MIDI',
+    'play_clip': 'Odtworz klip',
+    'stop_playback': 'Zatrzymaj odtwarzanie',
+    'playback_failed': 'Nie udalo sie odtworzyc klipu',
+    'audio_download_failed': 'Nie udalo sie pobrac pliku audio',
+    'random_melody_generated': 'Wygenerowano losowa melodie',
+    'random_melody_failed': 'Generowanie losowej melodii nie powiodlo sie',
+    'done': 'Gotowe',
   };
 
   static String of(BuildContext context, String key) {

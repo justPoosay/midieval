@@ -157,7 +157,9 @@ class _AuthScreenState extends State<AuthScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text("Błąd: $e")));
+      ).showSnackBar(
+        SnackBar(content: Text('${context.tr('error_prefix')}: $e')),
+      );
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -174,13 +176,15 @@ class _AuthScreenState extends State<AuthScreen> {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Zarejestrowano! Sprawdź email.")),
+        SnackBar(content: Text(context.tr('registered'))),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text("Błąd: $e")));
+      ).showSnackBar(
+        SnackBar(content: Text('${context.tr('error_prefix')}: $e')),
+      );
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -206,16 +210,16 @@ class _AuthScreenState extends State<AuthScreen> {
             const SizedBox(height: 32),
             TextField(
               controller: _emailController,
-              decoration: const InputDecoration(
-                labelText: "Email",
+              decoration: InputDecoration(
+                labelText: context.tr('email'),
                 border: OutlineInputBorder(),
               ),
             ),
             const SizedBox(height: 16),
             TextField(
               controller: _passwordController,
-              decoration: const InputDecoration(
-                labelText: "Hasło",
+              decoration: InputDecoration(
+                labelText: context.tr('password'),
                 border: OutlineInputBorder(),
               ),
               obscureText: true,
@@ -229,14 +233,14 @@ class _AuthScreenState extends State<AuthScreen> {
                   Expanded(
                     child: ElevatedButton(
                       onPressed: _handleSignIn,
-                      child: const Text("Wejdź"),
+                      child: Text(context.tr('sign_in')),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: OutlinedButton(
                       onPressed: _handleSignUp,
-                      child: const Text("Dołącz"),
+                      child: Text(context.tr('sign_up')),
                     ),
                   ),
                 ],
