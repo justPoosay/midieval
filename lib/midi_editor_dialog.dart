@@ -373,6 +373,68 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     return (tick / grid).round() * grid;
   }
 
+  int _newNoteDurationTicks() {
+    final grid = _gridTick();
+    if (_selectedIndex < 0 || _selectedIndex >= _notes.length) {
+      return grid;
+    }
+    return math.max(grid, _notes[_selectedIndex].durationTicks);
+  }
+
+  int _noteIndexAtPosition(
+    Offset localPosition, {
+    required int maxNote,
+    required double laneHeight,
+    required double tickScale,
+  }) {
+    final tick = (localPosition.dx / tickScale).round();
+    final noteValue = (maxNote - (localPosition.dy / laneHeight).floor()).clamp(
+      0,
+      127,
+    );
+    return _notes.indexWhere((n) {
+      final end = n.startTick + n.durationTicks;
+      return noteValue == n.note && tick >= n.startTick && tick <= end;
+    });
+  }
+
+  void _addNoteAtPosition(
+    Offset localPosition, {
+    required int maxNote,
+    required double laneHeight,
+    required double tickScale,
+  }) {
+    final hitIndex = _noteIndexAtPosition(
+      localPosition,
+      maxNote: maxNote,
+      laneHeight: laneHeight,
+      tickScale: tickScale,
+    );
+    if (hitIndex >= 0) {
+      _selectedIndex = hitIndex;
+      return;
+    }
+
+    _commitUndoState();
+    final startTick = _snapTick(
+      math.max(0, (localPosition.dx / tickScale).round()),
+    );
+    final noteValue = (maxNote - (localPosition.dy / laneHeight).floor()).clamp(
+      0,
+      127,
+    );
+    final newNote = EditableMidiNote(
+      note: noteValue,
+      startTick: startTick,
+      durationTicks: _newNoteDurationTicks(),
+      velocity: 100,
+    );
+    _notes.add(newNote);
+    _notes.sort((a, b) => a.startTick.compareTo(b.startTick));
+    _selectedIndex = _notes.indexOf(newNote);
+    _ensureTimelineCoversAll();
+  }
+
   int _initialTimelineTickEnd(List<EditableMidiNote> notes) {
     final defaultTicks = widget.parsed.ticksPerQuarter * 4;
     if (notes.isEmpty) return defaultTicks;
@@ -808,60 +870,72 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
                                     });
                                   }
                                 },
-                                child: Stack(
-                                  children: [
-                                    for (
-                                      var tick = 0;
-                                      tick <= tickEnd;
-                                      tick += _gridTick()
-                                    )
-                                      Positioned(
-                                        left: tick * tickScale,
-                                        top: 0,
-                                        bottom: 0,
-                                        child: Container(
-                                          width: tick % barTicks == 0 ? 2 : 1,
-                                          color: tick % barTicks == 0
-                                              ? const Color(0xFF3A3F4D)
-                                              : tick % beatTicks == 0
-                                              ? const Color(0xFF2A2D36)
-                                              : const Color(0xFF1A1C22),
-                                        ),
-                                      ),
-                                    for (var i = 0; i <= noteSpan; i++)
-                                      Positioned(
-                                        top: i * laneHeight,
-                                        left: 0,
-                                        right: 0,
-                                        child: Container(
-                                          height: 1,
-                                          color: const Color(0xFF1E2128),
-                                        ),
-                                      ),
-                                    if (_isPreviewPlaying || _playheadTick > 0)
-                                      Positioned(
-                                        left: (_playheadTick * tickScale).clamp(
-                                          0.0,
-                                          inner.maxWidth - 1,
-                                        ),
-                                        top: 0,
-                                        bottom: 0,
-                                        child: Container(
-                                          width: 2,
-                                          color: Colors.redAccent,
-                                        ),
-                                      ),
-                                    for (var i = 0; i < _notes.length; i++)
-                                      _buildNoteRect(
-                                        i,
-                                        _notes[i],
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onDoubleTapDown: (details) {
+                                    setState(() {
+                                      _addNoteAtPosition(
+                                        details.localPosition,
                                         maxNote: maxNote,
                                         laneHeight: laneHeight,
                                         tickScale: tickScale,
-                                        showConfidenceHeatmap:
-                                            _showConfidenceHeatmap,
-                                      ),
-                                  ],
+                                      );
+                                    });
+                                  },
+                                  child: Stack(
+                                    children: [
+                                      for (
+                                        var tick = 0;
+                                        tick <= tickEnd;
+                                        tick += _gridTick()
+                                      )
+                                        Positioned(
+                                          left: tick * tickScale,
+                                          top: 0,
+                                          bottom: 0,
+                                          child: Container(
+                                            width: tick % barTicks == 0 ? 2 : 1,
+                                            color: tick % barTicks == 0
+                                                ? const Color(0xFF3A3F4D)
+                                                : tick % beatTicks == 0
+                                                ? const Color(0xFF2A2D36)
+                                                : const Color(0xFF1A1C22),
+                                          ),
+                                        ),
+                                      for (var i = 0; i <= noteSpan; i++)
+                                        Positioned(
+                                          top: i * laneHeight,
+                                          left: 0,
+                                          right: 0,
+                                          child: Container(
+                                            height: 1,
+                                            color: const Color(0xFF1E2128),
+                                          ),
+                                        ),
+                                      if (_isPreviewPlaying ||
+                                          _playheadTick > 0)
+                                        Positioned(
+                                          left: (_playheadTick * tickScale)
+                                              .clamp(0.0, inner.maxWidth - 1),
+                                          top: 0,
+                                          bottom: 0,
+                                          child: Container(
+                                            width: 2,
+                                            color: Colors.redAccent,
+                                          ),
+                                        ),
+                                      for (var i = 0; i < _notes.length; i++)
+                                        _buildNoteRect(
+                                          i,
+                                          _notes[i],
+                                          maxNote: maxNote,
+                                          laneHeight: laneHeight,
+                                          tickScale: tickScale,
+                                          showConfidenceHeatmap:
+                                              _showConfidenceHeatmap,
+                                        ),
+                                    ],
+                                  ),
                                 ),
                               );
                             },

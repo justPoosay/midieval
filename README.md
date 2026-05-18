@@ -113,6 +113,7 @@ Rule going forward: before each commit, this section is updated.
 - [x] Improve key/scale constraint snapping with context-aware melodic direction scoring.
 - [x] Fix buggy piano-roll note interactions: smooth drag movement and isolated resize behavior (no random neighboring note stretch/shrink).
 - [x] Fix mixed-language localization leaks so default English mode no longer shows Polish tooltips/errors in key flows.
+- [x] Bring back piano-roll note creation via double-click, with new notes inheriting duration from the currently selected note.
 - [] Add hosted/production bridge reliability strategy (timeouts, retries, health fallback).
 - [] Consider moving bridge inference on-device/native for mobile (future architecture option).
 - [] Add smart rhythm repair presets (`Tight`, `Natural`, `Legato`, `Staccato`) that switch quantize/snap behavior profiles.
