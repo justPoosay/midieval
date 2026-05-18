@@ -94,6 +94,7 @@ Rule going forward: before each commit, this section is updated.
 - [x] Add language switch (English / Polish).
 - [x] UI redesign pass (lighter, less square, new typography, better spacing).
 - [x] Add celebration animation (jumping notes) on successful conversion.
+- [x] Upgrade celebration effect to full-screen multi-burst note confetti.
 - [x] Add app branding assets and integrate logo in auth/app bar.
 - [x] Add adaptive Android launcher icon branding.
 - [x] Move from ad-hoc naming to `Recording X` naming for recordings.

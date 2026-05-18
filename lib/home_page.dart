@@ -28,7 +28,9 @@ class _ConversionJobState {
   final double progress;
 }
 
+// ignore: unused_element
 class _JumpingNotesOverlay extends StatelessWidget {
+  // ignore: unused_element_parameter
   const _JumpingNotesOverlay({super.key});
 
   // ignore: unused_field
@@ -103,6 +105,109 @@ class _JumpingNotesOverlay extends StatelessWidget {
                               Shadow(
                                 color: color.withValues(alpha: 0.70),
                                 blurRadius: 14,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _FullScreenConfettiOverlay extends StatelessWidget {
+  const _FullScreenConfettiOverlay({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 2100),
+      curve: Curves.easeOutQuart,
+      builder: (context, value, _) {
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            final height = constraints.maxHeight;
+            final shortestSide = math.min(width, height);
+            const glyphs = <String>[
+              '\u266A',
+              '\u266B',
+              '\u266C',
+              '\u2669',
+              '\u2736',
+              '\u2022',
+              '+',
+              '*',
+            ];
+            const colors = <Color>[
+              Color(0xFF6EE7FF),
+              Color(0xFFC084FC),
+              Color(0xFFFFD166),
+              Color(0xFF8BFFB7),
+              Color(0xFFFF7AC6),
+            ];
+            const burstOrigins = <(double x, double y)>[
+              (0.50, 0.52),
+              (0.20, 0.42),
+              (0.80, 0.42),
+              (0.34, 0.68),
+              (0.66, 0.68),
+            ];
+
+            return Stack(
+              children: List<Widget>.generate(260, (i) {
+                final burst = burstOrigins[i % burstOrigins.length];
+                final centerX = width * burst.$1;
+                final centerY = height * burst.$2;
+                final ring = i % 5;
+                final localDelay = (i % 26) * 0.012 + ring * 0.018;
+                final p = ((value - localDelay) / (1 - localDelay)).clamp(
+                  0.0,
+                  1.0,
+                );
+                if (p <= 0) return const SizedBox.shrink();
+
+                final angle = ((i * 137) % 360) * (math.pi / 180.0);
+                final speed =
+                    shortestSide * (0.28 + (ring * 0.09)) + ((i * 17) % 90);
+                final flight = Curves.easeOut.transform(p);
+                final dx = math.cos(angle) * speed * flight;
+                final dy =
+                    math.sin(angle) * speed * flight +
+                    (shortestSide * 0.22 * p * p);
+                final spin = (i.isEven ? 1 : -1) * (p * math.pi * (3.0 + ring));
+                final alpha = (1.12 - p).clamp(0.0, 1.0);
+                final size = 10.0 + (i % 8) * 4.0;
+                final glyph = glyphs[i % glyphs.length];
+                final color = colors[i % colors.length];
+
+                return Positioned(
+                  left: centerX + dx,
+                  top: centerY + dy,
+                  child: Opacity(
+                    opacity: alpha,
+                    child: Transform.rotate(
+                      angle: spin,
+                      child: Transform.scale(
+                        scale: 0.95 + ((1 - p) * 0.45),
+                        child: Text(
+                          glyph,
+                          style: TextStyle(
+                            fontSize: size,
+                            fontWeight: FontWeight.w900,
+                            color: color,
+                            shadows: [
+                              Shadow(
+                                color: color.withValues(alpha: 0.70),
+                                blurRadius: 18,
                               ),
                             ],
                           ),
@@ -314,7 +419,8 @@ class _MyHomePageState extends State<MyHomePage> {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, controller.text.trim()),
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
             child: const Text('Save'),
           ),
         ],
@@ -1833,7 +1939,7 @@ class _MyHomePageState extends State<MyHomePage> {
           if (_showJumpingNotes)
             Positioned.fill(
               child: IgnorePointer(
-                child: _JumpingNotesOverlay(
+                child: _FullScreenConfettiOverlay(
                   key: ValueKey<int>(_jumpingNotesSeed),
                 ),
               ),
@@ -2248,4 +2354,3 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 }
-
