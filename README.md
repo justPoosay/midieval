@@ -110,6 +110,7 @@ Rule going forward: before each commit, this section is updated.
 - [x] Add bridge docs for TorchCrepe and Basic Pitch routes.
 - [x] Refactor `main.dart` into a thin bootstrap entry and move app implementation into dedicated files.
 - [x] Split app implementation into focused files (`app_shell`, `profile_settings_page`, `home_page`, `midi_editor_dialog`).
+- [x] Further split app architecture into domain folders (`home/audio`, `home/sketches`, `home/conversion`, `home/view`, `home/tutorial`, `midi/*`, `auth`, `profile`) and remove large dead legacy blocks from `home_page.dart`.
 - [x] Tune close-note handling to reduce accidental merges and preserve nearby melodic steps.
 - [x] Improve key/scale constraint snapping with context-aware melodic direction scoring.
 - [x] Fix buggy piano-roll note interactions: smooth drag movement and isolated resize behavior (no random neighboring note stretch/shrink).

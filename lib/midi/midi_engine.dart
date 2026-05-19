@@ -792,7 +792,9 @@ class MidiEngine {
           (_closestBeatInterval(intervalBeats) * _ticksPerQuarter).round();
       intervalTicksRaw.add(_roundToGrid(intervalTicks, _quantizeTicks));
     }
-    snappedIntervalTicks.addAll(_stabilizeSubdivisionIntervals(intervalTicksRaw));
+    snappedIntervalTicks.addAll(
+      _stabilizeSubdivisionIntervals(intervalTicksRaw),
+    );
 
     for (var i = 0; i < notes.length; i++) {
       final note = notes[i];
@@ -841,7 +843,9 @@ class MidiEngine {
     for (final ticks in intervalTicks) {
       counts[ticks] = (counts[ticks] ?? 0) + 1;
     }
-    final dominant = counts.entries.reduce((a, b) => a.value >= b.value ? a : b);
+    final dominant = counts.entries.reduce(
+      (a, b) => a.value >= b.value ? a : b,
+    );
     final dominantTicks = dominant.key;
     final dominantRatio = dominant.value / intervalTicks.length;
 
@@ -924,7 +928,10 @@ class MidiEngine {
       return noteTicks;
     }
 
-    final articulation = (note.durationSeconds / intervalSeconds).clamp(0.22, 1.25);
+    final articulation = (note.durationSeconds / intervalSeconds).clamp(
+      0.22,
+      1.25,
+    );
     // Preserve near-legato as full value, but keep explicit staccato space.
     final mapped = articulation >= 0.78 ? 1.0 : articulation;
     const durationGrid = _ticksPerQuarter ~/ 8;

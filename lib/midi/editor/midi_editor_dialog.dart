@@ -1,4 +1,4 @@
-part of 'app.dart';
+part of 'package:midieval/app.dart';
 
 class MidiEditorDialog extends StatefulWidget {
   const MidiEditorDialog({

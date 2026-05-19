@@ -1,4 +1,4 @@
-part of 'app.dart';
+part of 'package:midieval/app.dart';
 
 class MyApp extends StatefulWidget {
   const MyApp({super.key});
@@ -155,9 +155,7 @@ class _AuthScreenState extends State<AuthScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('${context.tr('error_prefix')}: $e')),
       );
     } finally {
@@ -175,14 +173,12 @@ class _AuthScreenState extends State<AuthScreen> {
         password: _passwordController.text.trim(),
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.tr('registered'))),
-      );
-    } catch (e) {
-      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(
+      ).showSnackBar(SnackBar(content: Text(context.tr('registered'))));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('${context.tr('error_prefix')}: $e')),
       );
     } finally {

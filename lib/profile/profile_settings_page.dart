@@ -1,4 +1,4 @@
-part of 'app.dart';
+part of 'package:midieval/app.dart';
 
 class ProfileSettingsPage extends StatefulWidget {
   const ProfileSettingsPage({super.key, this.tutorialMode = false});

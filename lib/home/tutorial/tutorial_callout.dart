@@ -1,4 +1,4 @@
-part of 'app.dart';
+part of 'package:midieval/app.dart';
 
 Offset? _targetCenterInOverlay({
   required BuildContext overlayContext,

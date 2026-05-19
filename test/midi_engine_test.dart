@@ -2,7 +2,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:midieval/midi_engine.dart';
+import 'package:midieval/midi/midi_engine.dart';
 import 'package:wav/wav.dart';
 
 void main() {
@@ -98,8 +98,24 @@ void main() {
     final noteDurations = _noteDurations(midiBytes);
 
     expect(events.length, greaterThanOrEqualTo(7));
-    expect(events.take(7).map((event) => event.note), [60, 62, 64, 65, 67, 69, 71]);
-    expect(events.take(7).map((event) => event.tick), [0, 240, 480, 720, 960, 1200, 1440]);
+    expect(events.take(7).map((event) => event.note), [
+      60,
+      62,
+      64,
+      65,
+      67,
+      69,
+      71,
+    ]);
+    expect(events.take(7).map((event) => event.tick), [
+      0,
+      240,
+      480,
+      720,
+      960,
+      1200,
+      1440,
+    ]);
     expect(noteDurations.isNotEmpty, isTrue);
   });
 
@@ -318,7 +334,8 @@ Uint8List _steadyStaccatoEighthPhraseWav() {
       final env = _testEnvelope(j, noteSamples);
       phase += 2 * math.pi * frequency / sampleRate;
       phase2 += 2 * math.pi * frequency * 2 / sampleRate;
-      samples[offset + j] = (math.sin(phase) * 0.65 + math.sin(phase2) * 0.24) * env * 0.85;
+      samples[offset + j] =
+          (math.sin(phase) * 0.65 + math.sin(phase2) * 0.24) * env * 0.85;
     }
     offset += noteSamples;
     if (i < gapLengths.length) {
@@ -381,7 +398,8 @@ Uint8List _mixedRhythmPhraseWav() {
       final env = _testEnvelope(j, noteSamples);
       phase += 2 * math.pi * frequency / sampleRate;
       phase2 += 2 * math.pi * frequency * 2 / sampleRate;
-      samples[offset + j] = (math.sin(phase) * 0.62 + math.sin(phase2) * 0.22) * env * 0.82;
+      samples[offset + j] =
+          (math.sin(phase) * 0.62 + math.sin(phase2) * 0.22) * env * 0.82;
     }
     offset += noteSamples;
     if (i < gaps.length) {
