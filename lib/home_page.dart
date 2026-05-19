@@ -289,12 +289,13 @@ class _MyHomePageState extends State<MyHomePage> {
     super.initState();
     _sketchesFuture = getSketches();
     unawaited(_configureAudioPlayer());
-    if (!_tutorialShownThisSession) {
-      _tutorialShownThisSession = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _startTutorial();
-      });
-    }
+    // Tutorial runtime is intentionally disabled for now.
+    // if (!_tutorialShownThisSession) {
+    //   _tutorialShownThisSession = true;
+    //   WidgetsBinding.instance.addPostFrameCallback((_) {
+    //     if (mounted) _startTutorial();
+    //   });
+    // }
     _playerCompleteSubscription = audioPlayer.onPlayerComplete.listen((_) {
       _clearPlayingSketch();
     });
@@ -1629,7 +1630,8 @@ class _MyHomePageState extends State<MyHomePage> {
           IconButton(
             tooltip: 'Tutorial',
             icon: const Icon(Icons.help_outline),
-            onPressed: _startTutorial,
+            // onPressed: _startTutorial, // Disabled: keep tutorial code, don't run it.
+            onPressed: null,
           ),
           IconButton(
             key: _settingsIconKey,
@@ -2065,7 +2067,8 @@ class _MyHomePageState extends State<MyHomePage> {
               ],
             ),
           ),
-          if (_tutorialActive) _buildTutorialOverlay(colorScheme),
+          // Disabled: keep tutorial overlay implementation in code, but don't render it.
+          // if (_tutorialActive) _buildTutorialOverlay(colorScheme),
           if (_showJumpingNotes)
             Positioned.fill(
               child: IgnorePointer(
