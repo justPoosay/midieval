@@ -360,9 +360,15 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<List<Map<String, dynamic>>> getSketches() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) {
+      _remoteSketches = [];
+      return _mergedSketches();
+    }
     final data = await Supabase.instance.client
         .from('sketches')
         .select()
+        .eq('user_id', user.id)
         .order('created_at', ascending: false);
     _remoteSketches = List<Map<String, dynamic>>.from(data);
     return _mergedSketches();
@@ -395,6 +401,14 @@ class _MyHomePageState extends State<MyHomePage> {
             !sessionPaths.contains(sketch['audio_path']),
       ),
     ];
+  }
+
+  Map<String, Object> _ownedSketchFilter(int sketchId) {
+    final userId = Supabase.instance.client.auth.currentUser?.id;
+    if (userId == null) {
+      return {'id': sketchId};
+    }
+    return {'id': sketchId, 'user_id': userId};
   }
 
   void _startTutorial() {
@@ -537,7 +551,7 @@ class _MyHomePageState extends State<MyHomePage> {
       await Supabase.instance.client
           .from('sketches')
           .update({'title': nextTitle})
-          .match({'id': sketchId});
+          .match(_ownedSketchFilter(sketchId));
       final index = _sessionSketches.indexWhere((s) => s['id'] == sketchId);
       if (index >= 0) {
         _sessionSketches[index] = {
@@ -572,6 +586,24 @@ class _MyHomePageState extends State<MyHomePage> {
     final title = _sketchTitleById(sketchId) ?? 'recording_$sketchId';
     final stem = _storageStemFromTitle(title);
     return '$stem.midi';
+  }
+
+  String _storagePathForUserFile(String fileName, {String? userId}) {
+    final uid =
+        userId ?? Supabase.instance.client.auth.currentUser?.id ?? 'anonymous';
+    return '$uid/$fileName';
+  }
+
+  String _storagePathFromPublicUrl(String publicUrl) {
+    final uri = Uri.tryParse(publicUrl);
+    if (uri == null) return publicUrl.split('/').last;
+    final bucketIndex = uri.pathSegments.indexOf('audio-samples');
+    if (bucketIndex >= 0 && bucketIndex + 1 < uri.pathSegments.length) {
+      return uri.pathSegments.sublist(bucketIndex + 1).join('/');
+    }
+    return uri.pathSegments.isNotEmpty
+        ? uri.pathSegments.last
+        : publicUrl.split('/').last;
   }
 
   String? _sketchTitleById(int sketchId) {
@@ -692,6 +724,7 @@ class _MyHomePageState extends State<MyHomePage> {
         final fileStem = _storageStemFromTitle(title);
         final fileName = '$fileStem.wav';
         final userId = Supabase.instance.client.auth.currentUser!.id;
+        final storagePath = _storagePathForUserFile(fileName, userId: userId);
         final createdAt = DateTime.now();
         localId = _nextLocalSketchId--;
         final localSketch = <String, dynamic>{
@@ -711,7 +744,7 @@ class _MyHomePageState extends State<MyHomePage> {
         await Supabase.instance.client.storage
             .from('audio-samples')
             .upload(
-              fileName,
+              storagePath,
               file,
               fileOptions: const FileOptions(
                 contentType: 'audio/wav',
@@ -722,7 +755,7 @@ class _MyHomePageState extends State<MyHomePage> {
         // 2. Pobranie Linku
         final String publicUrl = Supabase.instance.client.storage
             .from('audio-samples')
-            .getPublicUrl(fileName);
+            .getPublicUrl(storagePath);
         // 3. Zapis w DB
         final inserted = await Supabase.instance.client
             .from('sketches')
@@ -789,8 +822,11 @@ class _MyHomePageState extends State<MyHomePage> {
       return;
     }
 
-    final fileName = filePath.split('/').last;
-    await Supabase.instance.client.from('sketches').delete().match({'id': id});
+    final fileName = _storagePathFromPublicUrl(filePath);
+    await Supabase.instance.client
+        .from('sketches')
+        .delete()
+        .match(_ownedSketchFilter(id));
     await Supabase.instance.client.storage.from('audio-samples').remove([
       fileName,
     ]);
@@ -1106,12 +1142,13 @@ class _MyHomePageState extends State<MyHomePage> {
 
       // 4. Tworzymy unikalną nazwę, żeby uniknąć starych plików w pamięci
       final midiFileName = _storageMidiFileName(sketchId: sketchId);
+      final midiStoragePath = _storagePathForUserFile(midiFileName);
 
       // 5. Upload do Supabase Storage
       await Supabase.instance.client.storage
           .from('audio-samples')
           .uploadBinary(
-            midiFileName,
+            midiStoragePath,
             editedMidiBytes,
             fileOptions: const FileOptions(
               contentType: 'audio/midi',
@@ -1122,7 +1159,7 @@ class _MyHomePageState extends State<MyHomePage> {
       // 6. Pobieramy publiczny URL do nowego pliku .midi
       final String midiUrl = Supabase.instance.client.storage
           .from('audio-samples')
-          .getPublicUrl(midiFileName);
+          .getPublicUrl(midiStoragePath);
 
       // 7. Aktualizujemy bazę danych (zmieniamy tytuł i ścieżkę na MIDI)
       await Supabase.instance.client
@@ -1132,7 +1169,7 @@ class _MyHomePageState extends State<MyHomePage> {
             'status': 'ready',
             'last_error': null,
           })
-          .match({'id': sketchId});
+          .match(_ownedSketchFilter(sketchId));
 
       // 8. Sukces!
       if (mounted) {
@@ -1236,10 +1273,11 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
         );
         final midiFileName = _storageMidiFileName(sketchId: request.sketchId);
+        final midiStoragePath = _storagePathForUserFile(midiFileName);
         await Supabase.instance.client.storage
             .from('audio-samples')
             .uploadBinary(
-              midiFileName,
+              midiStoragePath,
               editedMidiBytes,
               fileOptions: const FileOptions(
                 contentType: 'audio/midi',
@@ -1248,7 +1286,7 @@ class _MyHomePageState extends State<MyHomePage> {
             );
         final midiUrl = Supabase.instance.client.storage
             .from('audio-samples')
-            .getPublicUrl(midiFileName);
+            .getPublicUrl(midiStoragePath);
         await Supabase.instance.client
             .from('sketches')
             .update({
@@ -1256,7 +1294,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   '🎵 MIDI: ${DateTime.now().hour}:${DateTime.now().minute}:${DateTime.now().second}',
               'audio_path': midiUrl,
             })
-            .match({'id': request.sketchId});
+            .match(_ownedSketchFilter(request.sketchId));
         await Supabase.instance.client
             .from('sketches')
             .update({
@@ -1266,7 +1304,7 @@ class _MyHomePageState extends State<MyHomePage> {
               'status': 'ready',
               'last_error': null,
             })
-            .match({'id': request.sketchId});
+            .match(_ownedSketchFilter(request.sketchId));
 
         _setJobState(
           request.sketchId,
@@ -1355,10 +1393,11 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
       );
       final midiFileName = _storageMidiFileName(sketchId: request.sketchId);
+      final midiStoragePath = _storagePathForUserFile(midiFileName);
       await Supabase.instance.client.storage
           .from('audio-samples')
           .uploadBinary(
-            midiFileName,
+            midiStoragePath,
             processedMidiBytes,
             fileOptions: const FileOptions(
               contentType: 'audio/midi',
@@ -1367,7 +1406,7 @@ class _MyHomePageState extends State<MyHomePage> {
           );
       final midiUrl = Supabase.instance.client.storage
           .from('audio-samples')
-          .getPublicUrl(midiFileName);
+          .getPublicUrl(midiStoragePath);
       await Supabase.instance.client
           .from('sketches')
           .update({
@@ -1375,7 +1414,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 '🎵 MIDI: ${DateTime.now().hour}:${DateTime.now().minute}:${DateTime.now().second}',
             'audio_path': midiUrl,
           })
-          .match({'id': request.sketchId});
+          .match(_ownedSketchFilter(request.sketchId));
       await Supabase.instance.client
           .from('sketches')
           .update({
@@ -1385,7 +1424,7 @@ class _MyHomePageState extends State<MyHomePage> {
             'status': 'ready',
             'last_error': null,
           })
-          .match({'id': request.sketchId});
+          .match(_ownedSketchFilter(request.sketchId));
 
       _setJobState(
         request.sketchId,
@@ -1409,7 +1448,7 @@ class _MyHomePageState extends State<MyHomePage> {
         Supabase.instance.client
             .from('sketches')
             .update({'status': 'failed', 'last_error': e.toString()})
-            .match({'id': request.sketchId}),
+            .match(_ownedSketchFilter(request.sketchId)),
       );
       _setJobState(
         request.sketchId,
@@ -2482,10 +2521,14 @@ class _MyHomePageState extends State<MyHomePage> {
 
       final ts = DateTime.now().millisecondsSinceEpoch.toString();
       final midiFileName = "random_melody_$ts.midi";
+      final midiStoragePath = _storagePathForUserFile(
+        midiFileName,
+        userId: user.id,
+      );
       await Supabase.instance.client.storage
           .from('audio-samples')
           .uploadBinary(
-            midiFileName,
+            midiStoragePath,
             midiBytes,
             fileOptions: const FileOptions(
               contentType: 'audio/midi',
@@ -2494,7 +2537,7 @@ class _MyHomePageState extends State<MyHomePage> {
           );
       final midiUrl = Supabase.instance.client.storage
           .from('audio-samples')
-          .getPublicUrl(midiFileName);
+          .getPublicUrl(midiStoragePath);
 
       await Supabase.instance.client.from('sketches').insert({
         'user_id': user.id,
