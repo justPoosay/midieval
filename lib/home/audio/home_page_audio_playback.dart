@@ -72,9 +72,36 @@ extension _HomePageAudioPlayback on _MyHomePageState {
       return sessionLocalPath;
     }
 
+    if (_HomePageConversionFlow._isMidiSource(audioUrl)) {
+      final sourceAudioUrl = await _sourceAudioUrlForMidiUrl(audioUrl);
+      if (sourceAudioUrl != null) {
+        try {
+          final localPath = await _localPlaybackPathForUrl(sourceAudioUrl);
+          _cachedAudioPathBySketchId[sketchId] = localPath;
+          return localPath;
+        } catch (e) {
+          debugPrint('Could not resolve inferred source recording: $e');
+        }
+      }
+    }
+
     final localPath = await _localPlaybackPathForUrl(audioUrl);
     _cachedAudioPathBySketchId[sketchId] = localPath;
     return localPath;
+  }
+
+  Future<String?> _sourceAudioUrlForMidiUrl(String midiUrl) async {
+    final uri = Uri.tryParse(midiUrl);
+    if (uri == null) return null;
+    final path = uri.path;
+    final lowerPath = path.toLowerCase();
+    final sourcePath = lowerPath.endsWith('.midi')
+        ? '${path.substring(0, path.length - 5)}.wav'
+        : lowerPath.endsWith('.mid')
+        ? '${path.substring(0, path.length - 4)}.wav'
+        : null;
+    if (sourcePath == null) return null;
+    return uri.replace(path: sourcePath).toString();
   }
 
   void _clearLocalAudioCache() {

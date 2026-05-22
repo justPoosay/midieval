@@ -8,6 +8,8 @@ class MidiEditorDialog extends StatefulWidget {
     required this.beatsPerMeasureOverride,
     required this.beatUnitOverride,
     this.keyScaleConstraint,
+    this.sourceAudioPath,
+    this.sourceAudioPlayer,
     this.tutorialMode = false,
     this.onTutorialCompleted,
   });
@@ -17,6 +19,8 @@ class MidiEditorDialog extends StatefulWidget {
   final int beatsPerMeasureOverride;
   final int beatUnitOverride;
   final KeyScaleConstraint? keyScaleConstraint;
+  final String? sourceAudioPath;
+  final AudioPlayer? sourceAudioPlayer;
   final bool tutorialMode;
   final VoidCallback? onTutorialCompleted;
 
@@ -36,6 +40,11 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
   bool _isPreviewPlaying = false;
   double _playheadTick = 0;
   Timer? _previewTimer;
+  AudioPlayer? _previewAudioPlayer;
+  bool _ownsPreviewAudioPlayer = false;
+  Future<void>? _previewAudioReady;
+  Duration _previewAudioLeadingSilence = Duration.zero;
+  Duration? _previewAudioDuration;
   late int _timelineTickEnd;
   int? _erasePointer;
   final Set<int> _erasedIndices = <int>{};
@@ -63,11 +72,19 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     if (widget.keyScaleConstraint != null) {
       _constrainNotesToScale(_notes, widget.keyScaleConstraint!);
     }
+    if (widget.sourceAudioPath != null) {
+      _previewAudioReady = _preparePreviewAudio(widget.sourceAudioPath!);
+    }
   }
 
   @override
   void dispose() {
     _previewTimer?.cancel();
+    if (_ownsPreviewAudioPlayer) {
+      unawaited(_previewAudioPlayer?.dispose());
+    } else {
+      unawaited(_previewAudioPlayer?.stop());
+    }
     super.dispose();
   }
 
@@ -603,6 +620,7 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
   Future<void> _togglePreviewPlayback(int tickEnd) async {
     if (_isPreviewPlaying) {
       _previewTimer?.cancel();
+      await _previewAudioPlayer?.stop();
       if (mounted) {
         setState(() => _isPreviewPlaying = false);
       }
@@ -613,7 +631,21 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     if (ticksPerSecond <= 0) return;
     final maxTick = math.max(1, tickEnd);
     if (_playheadTick >= maxTick) _playheadTick = 0;
+    if (_previewAudioReady != null) {
+      await _previewAudioReady;
+    }
     _previewTimer?.cancel();
+    final audioStarted = await _startPreviewAudio(ticksPerSecond);
+    if (widget.sourceAudioPath != null && !audioStarted) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not play the source recording preview.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
     if (!mounted) return;
     setState(() {
       _isPreviewPlaying = true;
@@ -626,11 +658,14 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
       setState(() {
         final previousTick = _playheadTick;
         _playheadTick += ticksPerSecond * 0.016;
-        _triggerNotesBetween(previousTick, _playheadTick);
+        if (_previewAudioPlayer == null) {
+          _triggerNotesBetween(previousTick, _playheadTick);
+        }
         if (_playheadTick >= maxTick) {
           _playheadTick = maxTick.toDouble();
           _isPreviewPlaying = false;
           timer.cancel();
+          unawaited(_previewAudioPlayer?.stop());
         }
       });
     });
@@ -638,11 +673,61 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
 
   Future<void> _rewindPreview() async {
     _previewTimer?.cancel();
+    await _previewAudioPlayer?.stop();
     if (!mounted) return;
     setState(() {
       _isPreviewPlaying = false;
       _playheadTick = 0;
     });
+  }
+
+  Future<void> _preparePreviewAudio(String sourceAudioPath) async {
+    try {
+      final audioFile = File(sourceAudioPath);
+      if (!await audioFile.exists()) return;
+      final trim = await _detectLeadingSilence(sourceAudioPath);
+      if (!mounted) return;
+      _previewAudioPlayer = widget.sourceAudioPlayer ?? AudioPlayer();
+      _ownsPreviewAudioPlayer = widget.sourceAudioPlayer == null;
+      await _previewAudioPlayer!.setReleaseMode(ReleaseMode.stop);
+      _previewAudioLeadingSilence = trim.leadingSilence;
+      _previewAudioDuration = trim.duration;
+    } catch (e) {
+      debugPrint('Could not prepare audio-backed MIDI preview: $e');
+    }
+  }
+
+  Future<bool> _startPreviewAudio(double ticksPerSecond) async {
+    final player = _previewAudioPlayer;
+    final sourceAudioPath = widget.sourceAudioPath;
+    if (sourceAudioPath == null) return true;
+    if (player == null) return false;
+
+    final playheadSeconds = _playheadTick / ticksPerSecond;
+    var position =
+        _previewAudioLeadingSilence +
+        Duration(milliseconds: (playheadSeconds * 1000).round());
+    final duration = _previewAudioDuration;
+    if (duration != null && position >= duration) {
+      position = _previewAudioLeadingSilence;
+      _playheadTick = 0;
+    }
+    try {
+      await player.stop();
+      await player.setPlayerMode(PlayerMode.mediaPlayer);
+      await player.setVolume(1);
+      await player.setSourceDeviceFile(sourceAudioPath);
+      if (position > Duration.zero) {
+        await player.seek(position);
+      }
+      await player.resume();
+      return true;
+    } catch (e) {
+      debugPrint('Could not start audio-backed MIDI preview: $e');
+      await player.stop();
+      _previewAudioPlayer = null;
+      return false;
+    }
   }
 
   void _triggerNotesBetween(double fromTick, double toTick) {
@@ -658,6 +743,87 @@ class _MidiEditorDialogState extends State<MidiEditorDialog> {
     // Disabled for now: experimental live preview synthesis on Windows.
     // Keeping implementation for future iteration.
     return;
+  }
+
+  Future<_PreviewAudioTrim> _detectLeadingSilence(String path) async {
+    final bytes = await File(path).readAsBytes();
+    final wav = _PreviewWavData.tryParse(bytes);
+    if (wav == null || wav.frameCount <= 0) {
+      return const _PreviewAudioTrim(
+        leadingSilence: Duration.zero,
+        duration: null,
+      );
+    }
+
+    final totalDuration = Duration(
+      microseconds: ((wav.frameCount / wav.sampleRate) * 1000000).round(),
+    );
+    final windowFrames = math.max(1, (wav.sampleRate * 0.015).round());
+    final hopFrames = math.max(1, (wav.sampleRate * 0.005).round());
+    final rmsValues = <double>[];
+    var peakRms = 0.0;
+
+    for (
+      var startFrame = 0;
+      startFrame < wav.frameCount;
+      startFrame += hopFrames
+    ) {
+      final endFrame = math.min(wav.frameCount, startFrame + windowFrames);
+      var sumSquares = 0.0;
+      var sampleCount = 0;
+      for (var frame = startFrame; frame < endFrame; frame++) {
+        for (var channel = 0; channel < wav.channels; channel++) {
+          final sample = wav.sampleAt(frame, channel);
+          sumSquares += sample * sample;
+          sampleCount++;
+        }
+      }
+      final rms = sampleCount == 0 ? 0.0 : math.sqrt(sumSquares / sampleCount);
+      rmsValues.add(rms);
+      peakRms = math.max(peakRms, rms);
+    }
+
+    if (peakRms <= 0.0001 || rmsValues.isEmpty) {
+      return _PreviewAudioTrim(
+        leadingSilence: Duration.zero,
+        duration: totalDuration,
+      );
+    }
+
+    final noiseWindowCount = math.max(
+      1,
+      math.min(rmsValues.length, (0.25 / 0.005).round()),
+    );
+    final noiseFloor = rmsValues
+        .take(noiseWindowCount)
+        .fold<double>(0.0, math.max);
+    final threshold = math.max(noiseFloor * 3.0, peakRms * 0.035);
+    final sustainWindows = math.max(2, (0.030 / 0.005).round());
+    var onsetWindow = 0;
+
+    for (var i = 0; i < rmsValues.length; i++) {
+      var sustained = true;
+      for (var j = 0; j < sustainWindows; j++) {
+        final index = i + j;
+        if (index >= rmsValues.length || rmsValues[index] < threshold) {
+          sustained = false;
+          break;
+        }
+      }
+      if (sustained) {
+        onsetWindow = i;
+        break;
+      }
+    }
+
+    final onsetFrame = (onsetWindow * hopFrames).clamp(0, wav.frameCount);
+    final leadingSilence = Duration(
+      microseconds: ((onsetFrame / wav.sampleRate) * 1000000).round(),
+    );
+    return _PreviewAudioTrim(
+      leadingSilence: leadingSilence,
+      duration: totalDuration,
+    );
   }
 
   // ignore: unused_element
@@ -1325,4 +1491,157 @@ class _ResizeDragContext {
   final int startTick;
   final int startDuration;
   final double tickScale;
+}
+
+class _PreviewAudioTrim {
+  const _PreviewAudioTrim({
+    required this.leadingSilence,
+    required this.duration,
+  });
+
+  final Duration leadingSilence;
+  final Duration? duration;
+}
+
+class _PreviewWavData {
+  const _PreviewWavData({
+    required this.bytes,
+    required this.dataOffset,
+    required this.dataSize,
+    required this.channels,
+    required this.sampleRate,
+    required this.bitsPerSample,
+    required this.audioFormat,
+    required this.blockAlign,
+  });
+
+  final Uint8List bytes;
+  final int dataOffset;
+  final int dataSize;
+  final int channels;
+  final int sampleRate;
+  final int bitsPerSample;
+  final int audioFormat;
+  final int blockAlign;
+
+  int get frameCount => blockAlign <= 0 ? 0 : dataSize ~/ blockAlign;
+
+  static _PreviewWavData? tryParse(Uint8List bytes) {
+    if (bytes.length < 44 ||
+        String.fromCharCodes(bytes.sublist(0, 4)) != 'RIFF' ||
+        String.fromCharCodes(bytes.sublist(8, 12)) != 'WAVE') {
+      return null;
+    }
+
+    int? audioFormat;
+    int? channels;
+    int? sampleRate;
+    int? bitsPerSample;
+    int? blockAlign;
+    int? dataOffset;
+    int? dataSize;
+    var offset = 12;
+
+    while (offset + 8 <= bytes.length) {
+      final chunkId = String.fromCharCodes(bytes.sublist(offset, offset + 4));
+      final chunkSize = _readUint32(bytes, offset + 4);
+      final chunkDataOffset = offset + 8;
+      if (chunkDataOffset + chunkSize > bytes.length) break;
+
+      if (chunkId == 'fmt ' && chunkSize >= 16) {
+        audioFormat = _readUint16(bytes, chunkDataOffset);
+        channels = _readUint16(bytes, chunkDataOffset + 2);
+        sampleRate = _readUint32(bytes, chunkDataOffset + 4);
+        blockAlign = _readUint16(bytes, chunkDataOffset + 12);
+        bitsPerSample = _readUint16(bytes, chunkDataOffset + 14);
+      } else if (chunkId == 'data') {
+        dataOffset = chunkDataOffset;
+        dataSize = chunkSize;
+      }
+
+      offset = chunkDataOffset + chunkSize + (chunkSize.isOdd ? 1 : 0);
+    }
+
+    if (audioFormat == null ||
+        channels == null ||
+        sampleRate == null ||
+        bitsPerSample == null ||
+        blockAlign == null ||
+        dataOffset == null ||
+        dataSize == null ||
+        channels <= 0 ||
+        sampleRate <= 0 ||
+        blockAlign <= 0) {
+      return null;
+    }
+
+    return _PreviewWavData(
+      bytes: bytes,
+      dataOffset: dataOffset,
+      dataSize: math.min(dataSize, bytes.length - dataOffset),
+      channels: channels,
+      sampleRate: sampleRate,
+      bitsPerSample: bitsPerSample,
+      audioFormat: audioFormat,
+      blockAlign: blockAlign,
+    );
+  }
+
+  double sampleAt(int frame, int channel) {
+    final bytesPerSample = bitsPerSample ~/ 8;
+    if (bytesPerSample <= 0) return 0;
+    final offset =
+        dataOffset + (frame * blockAlign) + (channel * bytesPerSample);
+    if (offset < dataOffset ||
+        offset + bytesPerSample > dataOffset + dataSize) {
+      return 0;
+    }
+
+    if (audioFormat == 3 && bitsPerSample == 32) {
+      final data = ByteData.sublistView(bytes, offset, offset + 4);
+      return data.getFloat32(0, Endian.little).clamp(-1.0, 1.0);
+    }
+    if (audioFormat != 1) return 0;
+
+    switch (bitsPerSample) {
+      case 8:
+        return (bytes[offset] - 128) / 128.0;
+      case 16:
+        final value = _readInt16(bytes, offset);
+        return value / 32768.0;
+      case 24:
+        var value =
+            bytes[offset] |
+            (bytes[offset + 1] << 8) |
+            (bytes[offset + 2] << 16);
+        if ((value & 0x800000) != 0) value |= ~0xFFFFFF;
+        return value / 8388608.0;
+      case 32:
+        final value = _readInt32(bytes, offset);
+        return value / 2147483648.0;
+      default:
+        return 0;
+    }
+  }
+
+  static int _readUint16(Uint8List bytes, int offset) {
+    return bytes[offset] | (bytes[offset + 1] << 8);
+  }
+
+  static int _readUint32(Uint8List bytes, int offset) {
+    return bytes[offset] |
+        (bytes[offset + 1] << 8) |
+        (bytes[offset + 2] << 16) |
+        (bytes[offset + 3] << 24);
+  }
+
+  static int _readInt16(Uint8List bytes, int offset) {
+    final value = _readUint16(bytes, offset);
+    return value >= 0x8000 ? value - 0x10000 : value;
+  }
+
+  static int _readInt32(Uint8List bytes, int offset) {
+    final value = _readUint32(bytes, offset);
+    return value >= 0x80000000 ? value - 0x100000000 : value;
+  }
 }

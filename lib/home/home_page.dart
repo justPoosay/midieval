@@ -344,6 +344,7 @@ class _MyHomePageState extends State<MyHomePage> {
     int? tempoOverrideBpm,
     ({int beatsPerMeasure, int beatUnit})? meterOverride,
     KeyScaleConstraint? keyScaleConstraint,
+    String? sourceAudioPath,
   }) async {
     final parsed = ParsedMidi.tryParse(midiBytes);
     if (parsed == null || parsed.notes.isEmpty) {
@@ -356,6 +357,11 @@ class _MyHomePageState extends State<MyHomePage> {
         );
       }
       return midiBytes;
+    }
+    if (!mounted) return midiBytes;
+    if (sourceAudioPath != null) {
+      await audioPlayer.stop();
+      _clearPlayingSketch();
     }
     if (!mounted) return midiBytes;
     final effectiveTempo = tempoOverrideBpm ?? parsed.tempoBpm;
@@ -371,6 +377,8 @@ class _MyHomePageState extends State<MyHomePage> {
         beatsPerMeasureOverride: effectiveMeterTop,
         beatUnitOverride: effectiveMeterBottom,
         keyScaleConstraint: keyScaleConstraint,
+        sourceAudioPath: sourceAudioPath,
+        sourceAudioPlayer: sourceAudioPath == null ? null : audioPlayer,
       ),
     );
   }

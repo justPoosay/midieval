@@ -203,6 +203,7 @@ class _HomePageConversionFlow {
                 isMinor: state._selectedScale == 'Minor',
               )
             : null,
+        sourceAudioPath: sourcePath,
       );
       if (editedMidiBytes == null) {
         _setJobState(
@@ -283,10 +284,25 @@ class _HomePageConversionFlow {
       );
       state._triggerJumpingNotes();
       if (state.mounted) {
-        state._sessionSketches.removeWhere(
+        final sessionIndex = state._sessionSketches.indexWhere(
           (item) => item['id'] == request.sketchId,
         );
-        state._refreshSketches();
+        if (sessionIndex >= 0) {
+          state._sessionSketches[sessionIndex] = {
+            ...state._sessionSketches[sessionIndex],
+            'audio_path': request.audioUrl,
+            '_local_audio_path': sourcePath,
+            'status': 'ready',
+            'last_error': null,
+          };
+          state._cachedAudioPathBySketchId[request.sketchId] = sourcePath;
+          state._showSessionSketches();
+          unawaited(
+            state.getSketches().then((_) => state._showSessionSketches()),
+          );
+        } else {
+          state._refreshSketches();
+        }
       }
       await Future<void>.delayed(const Duration(milliseconds: 900));
       if (state.mounted) {
